@@ -168,7 +168,7 @@ bool XtcSeries::load() {
 bool XtcSeries::openList(HalFile& file) const { return Storage.openFileForRead("XTS", listPath, file); }
 
 bool XtcSeries::readEntry(HalFile& list, const uint32_t index, Entry& out) const {
-  if (index >= lineOffsets.size() || !list.seek(lineOffsets[index])) return false;
+  if (index >= lineOffsets.size() || !list.isOpen() || !list.seek(lineOffsets[index])) return false;
   const int n = list.read(lineBuf, sizeof(lineBuf));
   if (n <= 0) return false;
   std::string_view line(lineBuf, static_cast<size_t>(n));
@@ -192,9 +192,18 @@ std::string XtcSeries::chapterPath(const char* file) const {
   return folder == "/" ? "/" + std::string(file) : folder + "/" + file;
 }
 
+bool XtcSeries::isAvailable(void* scan, const uint32_t index) {
+  auto* s = static_cast<AvailabilityScan*>(scan);
+  if (!s->entry) {
+    s->entry = makeUniqueNoThrow<Entry>();
+    if (!s->entry || !s->series.openList(s->list)) return false;
+  }
+  return s->series.readEntry(s->list, index, *s->entry) && Storage.exists(s->series.chapterPath(s->entry->file).c_str());
+}
+
 bool XtcSeries::isChapterAvailable(const uint32_t index) const {
-  auto entry = makeUniqueNoThrow<Entry>();
-  return entry && readEntry(index, *entry) && Storage.exists(chapterPath(entry->file).c_str());
+  AvailabilityScan scan(*this);
+  return isAvailable(&scan, index);
 }
 
 bool XtcSeries::loadProgress(uint32_t& chapter, uint32_t& page) const {

@@ -14,6 +14,7 @@
 #include <HalStorage.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,16 @@ class XtcSeries {
 
   std::string chapterPath(const char* file) const;
   bool isChapterAvailable(uint32_t index) const;
+
+  // Context for xtc::series::findAvailable/planTurn: keeps the list file open
+  // across a scan over many missing chapters instead of reopening it per chapter.
+  struct AvailabilityScan {
+    explicit AvailabilityScan(const XtcSeries& series) : series(series) {}
+    const XtcSeries& series;
+    HalFile list;
+    std::unique_ptr<Entry> entry;  // allocated on the first probe only
+  };
+  static bool isAvailable(void* scan, uint32_t index);
 
   // Progress (xtc::series::encodeProgress) lives in the cache dir, never in the
   // series folder, which another tool may own or rewrite.

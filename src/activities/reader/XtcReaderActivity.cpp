@@ -17,12 +17,6 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
-namespace {
-bool seriesChapterAvailable(void* ctx, const uint32_t chapter) {
-  return static_cast<const XtcSeries*>(ctx)->isChapterAvailable(chapter);
-}
-}  // namespace
-
 bool XtcReaderActivity::loadBook() {
   if (FsHelpers::isXtcSeriesIndex(bookPath)) {
     return loadSeries();
@@ -61,8 +55,12 @@ bool XtcReaderActivity::loadSeries() {
   series->loadProgress(chapter, page);
   // The saved chapter may no longer be on the card: resume at the nearest readable one.
   const uint32_t count = series->chapterCount();
-  int32_t target = xtc::series::findAvailable(chapter, 1, count, &seriesChapterAvailable, series.get());
-  if (target < 0) target = xtc::series::findAvailable(chapter, -1, count, &seriesChapterAvailable, series.get());
+  int32_t target;
+  {
+    XtcSeries::AvailabilityScan scan(*series);
+    target = xtc::series::findAvailable(chapter, 1, count, &XtcSeries::isAvailable, &scan);
+    if (target < 0) target = xtc::series::findAvailable(chapter, -1, count, &XtcSeries::isAvailable, &scan);
+  }
   if (target < 0 || !openSeriesChapter(static_cast<uint32_t>(target), false)) {
     LOG_ERR("XTR", "No readable chapter in series");
     return false;
@@ -107,8 +105,12 @@ bool XtcReaderActivity::changeSeriesChapter(const uint32_t chapter, const bool a
 }
 
 bool XtcReaderActivity::seriesPageTurn(const bool isForward) {
-  const auto turn = xtc::series::planTurn(seriesChapter, currentPage, xtc->getPageCount(), isForward,
-                                          series->chapterCount(), &seriesChapterAvailable, series.get());
+  xtc::series::Turn turn;
+  {
+    XtcSeries::AvailabilityScan scan(*series);
+    turn = xtc::series::planTurn(seriesChapter, currentPage, xtc->getPageCount(), isForward, series->chapterCount(),
+                                 &XtcSeries::isAvailable, &scan);
+  }
   switch (turn.kind) {
     case xtc::series::Turn::Kind::Page:
     case xtc::series::Turn::Kind::End:
