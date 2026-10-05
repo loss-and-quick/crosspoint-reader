@@ -75,6 +75,9 @@ class UiTabListActivity : public UiListActivity {
   // with more tabs (Settings) keep the default of 0 (fill the slot).
   int16_t tabPillMaxPad = 0;
 
+  // First tab shown while the tab bar scrolls horizontally (labels wider than the screen).
+  int tabFirstVisible = 0;
+
  private:
   static void tabActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
 };

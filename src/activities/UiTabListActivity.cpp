@@ -12,7 +12,24 @@ namespace fui = freeink::ui;
 
 namespace {
 constexpr int16_t TOUCH_TAB_BAR_HEIGHT = 50;
+// Air a tab label needs inside its slot before the bar scrolls instead of squeezing it.
+constexpr int kTabLabelPad = 12;
+
+// Number of equal-width tabs that fit the bar (all of them when they do); at least two so the bar stays a bar.
+int visibleTabCount(const int total, const int slotMin, const int width) {
+  if (slotMin <= 0 || slotMin * total <= width) return total;
+  const int fit = width / slotMin;
+  return fit < 2 ? (total < 2 ? total : 2) : fit;
 }
+
+// First visible tab of a window of `visible` tabs that keeps `active` in view, moving as little as possible.
+int scrollTabWindow(int first, const int visible, const int total, const int active) {
+  if (active < first) first = active;
+  if (active >= first + visible) first = active - visible + 1;
+  if (first > total - visible) first = total - visible;
+  return first < 0 ? 0 : first;
+}
+}  // namespace
 
 UiTabListActivity::UiTabListActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
                                      const bool wantsTouchLongPress)
@@ -103,17 +120,11 @@ void UiTabListActivity::buildTabBar(UiScreen& screen) {
   // Stack array, not a heap vector: this runs on every render and the tab
   // count is small and fixed.
   constexpr int MAX_TABS = 8;
-  const int count = tabCount() < MAX_TABS ? tabCount() : MAX_TABS;
+  const int total = tabCount() < MAX_TABS ? tabCount() : MAX_TABS;
   fui::TabItem tabs[MAX_TABS];
-  for (int i = 0; i < count; i++) {
-    tabs[i].label = tabLabel(i);
-    tabs[i].value = static_cast<int16_t>(i);
-    tabs[i].selected = activeTab() == i;
-    tabs[i].indicator = tabIndicator(i);
-  }
   fui::TabBarProps tabProps;
-  tabProps.tabs = tabs;
-  tabProps.count = static_cast<uint16_t>(count);
+  int first = 0;  // first tab of the window that fits, set below
+  int count = total;
   tabProps.action = ACTION_TAB;
   tabProps.inputMask = fui::InputTouch;
   // Pill shape and label size are theme-driven. Lyra uses equal-width slots
@@ -136,6 +147,30 @@ void UiTabListActivity::buildTabBar(UiScreen& screen) {
     tabProps.tabInset = tabsFocused ? fui::Insets{2, 4, 4, 4} : fui::Insets{2, 4, 0, 4};
     tabProps.contentInset = fui::Insets{2, 0, 2, 0};
   }
+  // Tabs are equal-width slots; when the labels no longer fit (many tabs, long translations) only a window of
+  // them is laid out and it scrolls to keep the active tab in view.
+  const auto side = static_cast<int16_t>(metrics.contentSidePadding);
+  {
+    int widest = 0;
+    for (int i = 0; i < total; i++) {
+      const int w = screen.target().measureText(tabProps.text.font, tabLabel(i), tabProps.text).width;
+      if (w > widest) widest = w;
+    }
+    const int slotMin = widest + kTabLabelPad + tabProps.tabInset.left + tabProps.tabInset.right + tabProps.gap;
+    const int slotsWidth = screen.frame().screen().width - 2 * side;
+    count = visibleTabCount(total, slotMin, slotsWidth);
+    tabFirstVisible = scrollTabWindow(tabFirstVisible, count, total, activeTab());
+    first = tabFirstVisible;
+  }
+  for (int i = 0; i < count; i++) {
+    const int tab = first + i;
+    tabs[i].label = tabLabel(tab);
+    tabs[i].value = static_cast<int16_t>(tab);
+    tabs[i].selected = activeTab() == tab;
+    tabs[i].indicator = tabIndicator(tab);
+  }
+  tabProps.tabs = tabs;
+  tabProps.count = static_cast<uint16_t>(count);
   const int16_t tabLineHeight = screen.target().lineHeight(tabProps.text.font);
   const int16_t preferredTabHeight =
       mappedInput.hasTouch() ? TOUCH_TAB_BAR_HEIGHT : static_cast<int16_t>(metrics.tabBarHeight);
@@ -200,6 +235,21 @@ void UiTabListActivity::buildTabBar(UiScreen& screen) {
                             static_cast<int16_t>(tabRect.height - divider)};
   tabProps.divider = false;
   fui::tabBar(screen.frame(), slotsRect, tabProps);
+  // Chevrons in the side padding mark tabs scrolled out of view.
+  const auto midY = static_cast<int16_t>(tabRect.y + (tabRect.height - divider) / 2);
+  const int16_t arm = side / 4 > 3 ? side / 4 : 3;
+  if (first > 0) {
+    const auto x = static_cast<int16_t>(contentTabRect.x + side / 2);
+    screen.target().triangle(fui::Point{x, static_cast<int16_t>(midY - arm)},
+                             fui::Point{x, static_cast<int16_t>(midY + arm)},
+                             fui::Point{static_cast<int16_t>(x - arm), midY}, fui::Paint::solid(fui::Color::Black));
+  }
+  if (first + count < total) {
+    const auto x = static_cast<int16_t>(contentTabRect.right() - side / 2);
+    screen.target().triangle(fui::Point{x, static_cast<int16_t>(midY - arm)},
+                             fui::Point{x, static_cast<int16_t>(midY + arm)},
+                             fui::Point{static_cast<int16_t>(x + arm), midY}, fui::Paint::solid(fui::Color::Black));
+  }
   screen.target().fill(fui::Rect{tabRect.x, static_cast<int16_t>(tabRect.bottom() - divider), tabRect.width, divider},
                        fui::Paint::solid(fui::Color::Black));
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
