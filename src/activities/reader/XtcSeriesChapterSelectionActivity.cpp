@@ -29,7 +29,7 @@ void XtcSeriesChapterSelectionActivity::onEnter() {
 }
 
 void XtcSeriesChapterSelectionActivity::onExit() {
-  list.close();
+  if (list.isOpen()) list.close();
   UiListActivity::onExit();
 }
 
