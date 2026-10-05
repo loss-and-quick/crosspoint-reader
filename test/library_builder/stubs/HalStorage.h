@@ -223,12 +223,12 @@ class HalStorage {
     if (file && (flags & (O_APPEND | O_AT_END))) file.pos = file.node->bytes.size();
     return file;
   }
-  bool openFileForRead(const char* module, const std::string& path, HalFile& file) {
-    return openFileForRead(module, path.c_str(), file);
-  }
   bool openFileForRead(const char*, const char* path, HalFile& file) {
     file = open(path);
     return bool(file);
+  }
+  bool openFileForRead(const char* module, const std::string& path, HalFile& file) {
+    return openFileForRead(module, path.c_str(), file);
   }
   bool openFileForWrite(const char*, const char* path, HalFile& file) {
     fake::add(path, "");
