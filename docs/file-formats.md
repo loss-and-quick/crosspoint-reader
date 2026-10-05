@@ -515,3 +515,37 @@ make a real book disappear.
 
 `selfSize` is the expected file size. Comparing it against the real one is a free
 truncation guard: a build cut short by a power failure cannot pass.
+
+## `series.idx` — XTC series (one book across a folder of XTC/XTCH files)
+
+Read by `lib/Xtc/XtcSeries.cpp`, parsed by `lib/Xtc/Xtc/XtcSeriesFormat.cpp`. Not
+written by the firmware; converters or the user place it in the folder holding
+the chapter files. The file browser lists it as a book; opening it reads the
+chapters as one continuous book (page past the last page of a chapter opens the
+next chapter, and back from its first page opens the previous chapter's last page).
+
+Plain UTF-8 text, `\n` or `\r\n` line endings:
+
+```
+XSERIES 1
+<file>\t<pages>\t<title>
+...
+```
+
+* First line is exactly `XSERIES 1` (a UTF-8 BOM is tolerated).
+* One line per chapter, in reading order. `<file>` is a bare `.xtc`/`.xtch` file
+  name inside the same folder (no `/`, no `..`). `<pages>` is a decimal page count
+  shown in the chapter list (0 or empty = unknown). `<title>` is optional and falls
+  back to the file name without its extension.
+* Listed files may be absent from the card. They are shown as missing in the
+  chapter list and skipped while paging.
+* Invalid lines are skipped. Lines longer than 320 bytes keep their first 320 bytes.
+  At most 4096 chapters are read.
+* An idx containing only the header line reads the folder's `.xtc`/`.xtch` files
+  in natural name order (`ch2` before `ch10`, at most 512 files); the generated
+  list is written to `.crosspoint/xtcs_<hash>/order.idx`.
+
+Reading progress is kept in `.crosspoint/xtcs_<hash of the idx path>/progress.bin`
+(little-endian): `u8 version = 1`, `u32 chapter index`, `u32 page`, `u8 name length`,
+chapter file name. The file name re-finds the chapter when the idx is rewritten
+with chapters inserted or removed.
