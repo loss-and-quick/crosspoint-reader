@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Xtc.h>
+#include <XtcSeries.h>
 
 #include <memory>
 #include <string>
@@ -10,6 +11,12 @@
 class XtcReaderActivity final : public ReaderActivity {
   std::shared_ptr<Xtc> xtc;
   uint32_t currentPage = 0;
+
+  // Series mode (bookPath is a series.idx): `xtc` holds only the current
+  // chapter file, reopened at chapter boundaries.
+  std::shared_ptr<XtcSeries> series;
+  std::unique_ptr<XtcSeries::Entry> seriesEntry;  // current chapter's file and title
+  uint32_t seriesChapter = 0;
 
   enum class StatusBarOverlayPosition { Bottom, Top };
   struct StatusBarInfo {
@@ -24,11 +31,16 @@ class XtcReaderActivity final : public ReaderActivity {
   StatusBarInfo getStatusBarInfo() const;
   void saveProgress() const;
   void loadProgress();
+  bool loadSeries();
+  bool openSeriesChapter(uint32_t chapter, bool atLastPage);
+  bool changeSeriesChapter(uint32_t chapter, bool atLastPage);
+  bool seriesPageTurn(bool isForward);
 
   bool loadBook() override;
-  std::string getBookTitle() const override { return xtc ? xtc->getTitle() : ""; }
-  std::string getBookAuthor() const override { return xtc ? xtc->getAuthor() : ""; }
-  std::string getBookThumbBmpPath() const override { return xtc ? xtc->getThumbBmpPath() : ""; }
+  std::string getBookTitle() const override;
+  std::string getBookAuthor() const override { return xtc && !series ? xtc->getAuthor() : ""; }
+  std::string getBookThumbBmpPath() const override { return xtc && !series ? xtc->getThumbBmpPath() : ""; }
+  std::string getEndOfBookAnchorPath() const override;
   bool handleFormatInput() override;
   void renderBook() override;
   void applyInitialOrientation() override;

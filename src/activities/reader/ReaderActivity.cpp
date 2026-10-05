@@ -33,7 +33,7 @@ std::unique_ptr<ReaderActivity> ReaderActivity::create(GfxRenderer& renderer, Ma
                                                        std::string path, const bool allowFastInitialRefresh) {
   // ActivityManager requires heap ownership; each branch allocates exactly one screen-lifetime object.
   std::unique_ptr<ReaderActivity> activity;
-  if (FsHelpers::hasXtcExtension(path)) {
+  if (FsHelpers::hasXtcExtension(path) || FsHelpers::isXtcSeriesIndex(path)) {
     activity = makeUniqueNoThrow<XtcReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
   } else {
     activity = makeUniqueNoThrow<EpubReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
@@ -248,7 +248,7 @@ void ReaderActivity::render(RenderLock&&) {
     }
     renderer.clearScreen();
     if (endOfBookOptions) {
-      endOfBookOptions->loadOnce(bookPath);
+      endOfBookOptions->loadOnce(getEndOfBookAnchorPath());
       // Release-publish AFTER loadOnce() so the main task's acquire load can't
       // observe an object whose names/selector are still being populated.
       endOfBookOptionsReady.store(true, std::memory_order_release);

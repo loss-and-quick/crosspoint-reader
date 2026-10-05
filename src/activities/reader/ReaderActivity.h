@@ -44,6 +44,8 @@ class ReaderActivity : public Activity {
   // EpubReaderActivity overrides getProgressBasisPoints() and falls back to it.
   int getProgressPercent() const { return getScreenshotInfo().progressPercent; }
   virtual int getProgressBasisPoints() const { return getProgressPercent() * 100; }
+  // Path whose folder siblings the end-of-book menu suggests next.
+  virtual std::string getEndOfBookAnchorPath() const { return bookPath; }
 
   virtual bool handleFormatInput() { return false; }
   virtual bool pageTurn(bool isForward) = 0;
