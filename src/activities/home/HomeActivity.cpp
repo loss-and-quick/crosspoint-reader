@@ -101,18 +101,15 @@ void HomeActivity::fillCoverGridFromLibrary() {
 
 namespace {
 
-// Cover slot of a series record: its `#cover` BMP when present, else the thumbnail
-// slot of its first chapter (generated on demand). Reads only the idx header.
+// Cover slot of a series record: the per-height thumbnail token path, generated on
+// demand from its `#cover` BMP or its first chapter. Reads only the idx header.
 std::string seriesCoverPath(const std::string& indexPath) {
   auto series = makeUniqueNoThrow<XtcSeries>(indexPath, "/.crosspoint");
   if (!series) {
     LOG_ERR("HOME", "OOM: series cover path");
     return {};
   }
-  if (series->loadMetadata()) {
-    std::string cover = series->getCoverBmpPath();
-    if (!cover.empty()) return cover;
-  }
+  series->loadMetadata();
   return series->getThumbBmpPath();
 }
 
@@ -184,11 +181,6 @@ void HomeActivity::loadGridCover(RecentBook& book, int height, bool& showingLoad
     if (!series || !series->load()) {
       LOG_ERR("HOME", "cover series unavailable");
       book.coverBmpPath.clear();
-      return;
-    }
-    std::string cover = series->getCoverBmpPath();
-    if (!cover.empty()) {
-      book.coverBmpPath = std::move(cover);
       return;
     }
     book.coverBmpPath = series->getThumbBmpPath();

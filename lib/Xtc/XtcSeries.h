@@ -55,13 +55,13 @@ class XtcSeries {
   bool readEntry(HalFile& list, uint32_t index, Entry& out) const;
   bool openList(HalFile& file) const;
 
-  // Cover shown for the series: the idx `#cover` BMP when it exists in the folder
-  // (path as stored in Recent/Library), else the thumbnail slot below. Needs
-  // load() or loadMetadata().
-  std::string getCoverBmpPath() const;
-  // Thumbnail of the first existing chapter, cached beside the progress file like
-  // other books ("[HEIGHT]" form is the token UITheme::getCoverThumbPath fills in).
-  std::string getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].bmp"; }
+  // The series cover is a per-height thumbnail, like any other book's: the idx
+  // `#cover` BMP scaled to the slot when the folder has one, else the thumbnail of
+  // the first existing chapter. getThumbBmpPath() is the "[HEIGHT]" token form
+  // UITheme::getCoverThumbPath fills in. The cover and the chapter fallback use
+  // different file names, so adding a `#cover` later never leaves a stale chapter
+  // thumbnail in place. Needs load() or loadMetadata().
+  std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
   // Needs load(). Returns true when the thumbnail exists afterwards.
   bool generateThumbBmp(int height) const;
@@ -99,4 +99,7 @@ class XtcSeries {
 
   bool indexList(HalFile& file, xtc::series::Metadata* meta, bool& headerOnly);
   bool writeNaturalOrderList();
+  // The `#cover` BMP path when it exists in the folder, else empty.
+  std::string getCoverBmpPath() const;
+  bool generateThumbFromCover(int height, const std::string& coverPath, const std::string& outPath) const;
 };
