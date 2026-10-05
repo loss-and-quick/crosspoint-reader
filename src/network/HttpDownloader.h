@@ -25,6 +25,16 @@ class HttpDownloader {
     FILE_ERROR,
     ABORTED,
     UNAUTHORIZED,  // 401/403: callers holding a refreshable credential can retry
+    // Returned only by downloadToFileResumable().
+    SIZE_MISMATCH,  // entity length differs from ResumeOptions::expectedSize
+    CRC_MISMATCH,   // body does not match ResumeOptions::expectedCrc32
+  };
+
+  struct ResumeOptions {
+    size_t expectedSize = 0;  // 0 = unknown
+    bool verifyCrc32 = false;
+    uint32_t expectedCrc32 = 0;  // zlib CRC-32 of the complete file
+    bool downgradeRedirectsToHttp = false;
   };
 
   // Pre-flight floor for starting a TLS transfer. Below this the session or
@@ -121,4 +131,26 @@ class HttpDownloader {
   static DownloadError postToFile(const std::string& url, const std::string& body, const std::string& contentType,
                                   const std::string& destPath, ProgressCallback progress = nullptr,
                                   const bool* cancelFlag = nullptr);
+
+  /**
+   * Like downloadToFile(), but a failed or cancelled transfer leaves its
+   * "<destPath>.part" behind so a later call continues it with a Range request
+   * instead of starting over (a dropped connection inside one call is already
+   * resumed by freeink::fetchResumable).
+   *
+   * A "<destPath>.part.meta" sidecar records the source URL hash, the entity
+   * length and a validator (strong ETag or Last-Modified, sent as If-Range, so
+   * a changed entity comes back as a full 200 and restarts the file); a ".part"
+   * without a matching sidecar is discarded. The finished file is checked
+   * against the optional expected size and CRC-32 before it replaces destPath.
+   * Progress reports absolute bytes, including the resumed prefix.
+   *
+   * HTTP_ERROR, UNAUTHORIZED and ABORTED keep the ".part"; any other error
+   * discards it. Same TLS heap pre-flight as downloadToFile().
+   */
+  static DownloadError downloadToFileResumable(const std::string& url, const std::string& destPath,
+                                               const ResumeOptions& options, ProgressCallback progress = nullptr,
+                                               const bool* cancelFlag = nullptr, const std::string& username = "",
+                                               const std::string& password = "",
+                                               const std::vector<Header>& headers = {});
 };
