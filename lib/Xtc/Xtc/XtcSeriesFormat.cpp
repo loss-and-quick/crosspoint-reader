@@ -27,6 +27,72 @@ uint32_t getLe32(const uint8_t* p) {
 
 }  // namespace
 
+void copyTruncated(char* out, const size_t cap, const std::string_view in) {
+  if (cap == 0) return;
+  size_t n = in.size() < cap - 1 ? in.size() : cap - 1;
+  if (n < in.size()) {
+    while (n > 0 && (static_cast<unsigned char>(in[n]) & 0xC0) == 0x80) --n;
+  }
+  memcpy(out, in.data(), n);
+  out[n] = '\0';
+}
+
+bool parseMeta(std::string_view line, MetaView& out) {
+  line = stripCr(line);
+  if (line.empty() || line.front() != '#') return false;
+  out = {};
+  const size_t tab = line.find('\t');
+  if (tab == std::string_view::npos) return true;
+  const std::string_view key = line.substr(1, tab - 1);
+  out.value = line.substr(tab + 1);
+  if (key == "title") {
+    out.key = MetaView::Key::Title;
+  } else if (key == "author") {
+    out.key = MetaView::Key::Author;
+  } else if (key == "cover") {
+    out.key = MetaView::Key::Cover;
+  }
+  return true;
+}
+
+bool Metadata::consumeLine(const std::string_view line) {
+  if (ended) return false;
+  if (stripCr(line).empty()) return true;
+  MetaView meta;
+  if (!parseMeta(line, meta)) {
+    ended = true;
+    return false;
+  }
+  switch (meta.key) {
+    case MetaView::Key::Title:
+      copyTruncated(title, sizeof(title), meta.value);
+      break;
+    case MetaView::Key::Author:
+      copyTruncated(author, sizeof(author), meta.value);
+      break;
+    case MetaView::Key::Cover:
+      // Only a plain .bmp inside the series folder; anything else is ignored.
+      if (FsHelpers::isSafePathComponent(meta.value) && FsHelpers::hasBmpExtension(meta.value) &&
+          meta.value.size() < sizeof(cover)) {
+        copyTruncated(cover, sizeof(cover), meta.value);
+      }
+      break;
+    case MetaView::Key::Unknown:
+      break;
+  }
+  return true;
+}
+
+void MetadataReader::onLine(void* ctx, uint32_t /*offset*/, const std::string_view line, bool /*truncated*/) {
+  auto* self = static_cast<MetadataReader*>(ctx);
+  if (!self->sawHeader) {
+    self->sawHeader = true;
+    self->headerOk_ = isHeaderLine(line);
+    return;
+  }
+  if (self->headerOk_) self->meta.consumeLine(line);
+}
+
 bool isHeaderLine(std::string_view line) {
   constexpr std::string_view BOM = "\xEF\xBB\xBF";
   if (line.substr(0, BOM.size()) == BOM) line.remove_prefix(BOM.size());
@@ -35,6 +101,7 @@ bool isHeaderLine(std::string_view line) {
 
 bool parseEntry(std::string_view line, EntryView& out) {
   line = stripCr(line);
+  if (!line.empty() && line.front() == '#') return false;  // metadata line
   const size_t tab1 = line.find('\t');
   if (tab1 == std::string_view::npos) return false;
   const std::string_view file = line.substr(0, tab1);

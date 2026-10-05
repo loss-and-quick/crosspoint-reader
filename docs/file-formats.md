@@ -528,18 +528,29 @@ Plain UTF-8 text, `\n` or `\r\n` line endings:
 
 ```
 XSERIES 1
+#title\t<series title>
+#author\t<author>
+#cover\t<cover.bmp>
 <file>\t<pages>\t<title>
 ...
 ```
 
 * First line is exactly `XSERIES 1` (a UTF-8 BOM is tolerated).
+* Optional metadata lines follow the header, before the first chapter line. A line
+  starting with `#` is metadata and is never a chapter: `#title\t<text>` is the series
+  title shown in the Library, Recent and the reader (default: the folder name),
+  `#author\t<text>` the author, `#cover\t<name>.bmp` a BMP inside the same folder used
+  as the cover (default: the first existing chapter's first page). Values are cut at
+  127 bytes (cover name: 63); an unsafe or non-`.bmp` cover name and unknown keys are
+  ignored. `#` lines after the first chapter line are skipped.
 * One line per chapter, in reading order. `<file>` is a bare `.xtc`/`.xtch` file
   name inside the same folder (no `/`, no `..`). `<pages>` is a decimal page count
   shown in the chapter list (0 or empty = unknown). `<title>` is optional and falls
   back to the file name without its extension.
 * Listed files may be absent from the card. They are shown as missing in the
   chapter list and skipped while paging.
-* Invalid lines are skipped. Lines longer than 320 bytes keep their first 320 bytes.
+* Invalid lines are skipped (`#` lines are not invalid). Lines longer than 320 bytes
+  keep their first 320 bytes.
   At most 4096 chapters are read.
 * An idx containing only the header line reads the folder's `.xtc`/`.xtch` files
   in natural name order (`ch2` before `ch10`, at most 512 files); the generated

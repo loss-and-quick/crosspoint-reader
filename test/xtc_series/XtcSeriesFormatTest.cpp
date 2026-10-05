@@ -229,3 +229,114 @@ TEST(XtcSeriesProgress, RejectsTruncatedOrForeignData) {
 }
 
 }  // namespace
+
+namespace {
+
+Metadata readMetadata(const std::string& idx, const size_t chunk, bool* headerOk = nullptr) {
+  MetadataReader reader;
+  for (size_t i = 0; i < idx.size() && !reader.done(); i += chunk) {
+    reader.feed(idx.data() + i, std::min(chunk, idx.size() - i));
+  }
+  reader.finish();
+  if (headerOk) *headerOk = reader.headerOk();
+  return reader.metadata();
+}
+
+}  // namespace
+
+TEST(XtcSeriesMeta, ParsesKnownKeys) {
+  MetaView meta;
+  ASSERT_TRUE(parseMeta("#title\tOne Piece"sv, meta));
+  EXPECT_EQ(meta.key, MetaView::Key::Title);
+  EXPECT_EQ(meta.value, "One Piece"sv);
+  ASSERT_TRUE(parseMeta("#author\tOda\r"sv, meta));
+  EXPECT_EQ(meta.key, MetaView::Key::Author);
+  EXPECT_EQ(meta.value, "Oda"sv);
+  ASSERT_TRUE(parseMeta("#cover\tcover.bmp"sv, meta));
+  EXPECT_EQ(meta.key, MetaView::Key::Cover);
+  EXPECT_EQ(meta.value, "cover.bmp"sv);
+}
+
+TEST(XtcSeriesMeta, UnknownKeysAndMissingTabAreMetadataWithoutKey) {
+  MetaView meta;
+  ASSERT_TRUE(parseMeta("#future\tvalue"sv, meta));
+  EXPECT_EQ(meta.key, MetaView::Key::Unknown);
+  ASSERT_TRUE(parseMeta("#title"sv, meta));
+  EXPECT_EQ(meta.key, MetaView::Key::Unknown);
+  ASSERT_TRUE(parseMeta("# comment"sv, meta));
+  EXPECT_EQ(meta.key, MetaView::Key::Unknown);
+}
+
+TEST(XtcSeriesMeta, ChapterAndBlankLinesAreNotMetadata) {
+  MetaView meta;
+  EXPECT_FALSE(parseMeta("ch1.xtc\t10\tOne"sv, meta));
+  EXPECT_FALSE(parseMeta(""sv, meta));
+}
+
+TEST(XtcSeriesMeta, MetadataLinesAreNeverChapters) {
+  EntryView entry;
+  EXPECT_FALSE(parseEntry("#title\tOne Piece"sv, entry));
+  EXPECT_FALSE(parseEntry("#cover.xtc\t3\tx"sv, entry));
+  EXPECT_TRUE(parseEntry("ch1.xtc\t3\tx"sv, entry));
+}
+
+TEST(XtcSeriesMeta, ReaderCollectsMetadataAcrossChunkSizes) {
+  const std::string idx =
+      "XSERIES 1\n#title\tBerserk\n#author\tMiura\r\n\n#cover\tcover.bmp\n#unknown\tx\nch1.xtc\t10\tOne\n";
+  for (const size_t chunk : {1u, 3u, 7u, 512u}) {
+    bool headerOk = false;
+    const Metadata meta = readMetadata(idx, chunk, &headerOk);
+    EXPECT_TRUE(headerOk) << chunk;
+    EXPECT_STREQ(meta.title, "Berserk") << chunk;
+    EXPECT_STREQ(meta.author, "Miura") << chunk;
+    EXPECT_STREQ(meta.cover, "cover.bmp") << chunk;
+    EXPECT_TRUE(meta.ended) << chunk;
+  }
+}
+
+TEST(XtcSeriesMeta, MetadataAfterFirstChapterIsIgnored) {
+  const Metadata meta = readMetadata("XSERIES 1\nch1.xtc\t1\tOne\n#title\tLate\n", 512);
+  EXPECT_STREQ(meta.title, "");
+}
+
+TEST(XtcSeriesMeta, ToleratesBomAndHeaderOnlyIdx) {
+  bool headerOk = false;
+  const Metadata meta = readMetadata("\xEF\xBB\xBFXSERIES 1\n#title\tT\n", 4, &headerOk);
+  EXPECT_TRUE(headerOk);
+  EXPECT_STREQ(meta.title, "T");
+  EXPECT_FALSE(meta.ended);
+}
+
+TEST(XtcSeriesMeta, RejectsFileWithoutHeader) {
+  bool headerOk = true;
+  const Metadata meta = readMetadata("#title\tNope\nXSERIES 1\n", 512, &headerOk);
+  EXPECT_FALSE(headerOk);
+  EXPECT_STREQ(meta.title, "");
+}
+
+TEST(XtcSeriesMeta, UnsafeOrNonBmpCoverIsDropped) {
+  for (const char* cover : {"../cover.bmp", "sub/cover.bmp", "cover.png", "", "cover"}) {
+    const Metadata meta = readMetadata(std::string("XSERIES 1\n#cover\t") + cover + "\n", 512);
+    EXPECT_STREQ(meta.cover, "") << cover;
+  }
+  EXPECT_STREQ(readMetadata("XSERIES 1\n#cover\tCOVER.BMP\n", 512).cover, "COVER.BMP");
+}
+
+TEST(XtcSeriesMeta, LongValuesAreCutOnUtf8Boundaries) {
+  std::string title;
+  for (size_t i = 0; i < 100; ++i) title += "\xD0\x96";  // 200 bytes of Cyrillic
+  const Metadata meta = readMetadata("XSERIES 1\n#title\t" + title + "\n", 512);
+  const std::string_view shown = meta.title;
+  EXPECT_LT(shown.size(), META_TEXT_BYTES);
+  EXPECT_EQ(shown.size() % 2, 0u);
+  EXPECT_EQ(title.compare(0, shown.size(), shown), 0);
+}
+
+TEST(XtcSeriesMeta, CopyTruncatedHandlesTinyBuffers) {
+  char buf[1] = {'x'};
+  copyTruncated(buf, sizeof(buf), "abc"sv);
+  EXPECT_EQ(buf[0], '\0');
+  char three[3];
+  copyTruncated(three, sizeof(three), "\xD0\x96\xD0\x96"sv);
+  EXPECT_STREQ(three, "\xD0\x96");
+}
