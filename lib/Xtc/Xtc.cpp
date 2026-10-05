@@ -279,9 +279,11 @@ bool Xtc::generateCoverBmp() const {
 std::string Xtc::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].bmp"; }
 std::string Xtc::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
 
-bool Xtc::generateThumbBmp(int height) const {
+bool Xtc::generateThumbBmp(const int height) const { return generateThumbBmp(height, getThumbBmpPath(height)); }
+
+bool Xtc::generateThumbBmp(const int height, const std::string& outPath) const {
   // Already generated
-  if (Storage.exists(getThumbBmpPath(height).c_str())) {
+  if (Storage.exists(outPath.c_str())) {
     return true;
   }
 
@@ -324,7 +326,7 @@ bool Xtc::generateThumbBmp(int height) const {
     if (generateCoverBmp()) {
       HalFile src, dst;
       if (Storage.openFileForRead("XTC", getCoverBmpPath(), src)) {
-        if (Storage.openFileForWrite("XTC", getThumbBmpPath(height), dst)) {
+        if (Storage.openFileForWrite("XTC", outPath, dst)) {
           uint8_t buffer[512];
           while (src.available()) {
             size_t bytesRead = src.read(buffer, sizeof(buffer));
@@ -333,7 +335,7 @@ bool Xtc::generateThumbBmp(int height) const {
         }
       }
       LOG_DBG("XTC", "Copied cover to thumb (no scaling needed)");
-      return Storage.exists(getThumbBmpPath(height).c_str());
+      return Storage.exists(outPath.c_str());
     }
     return false;
   }
@@ -369,7 +371,7 @@ bool Xtc::generateThumbBmp(int height) const {
 
   // Create thumbnail BMP file - use 1-bit format for fast home screen rendering (no gray passes)
   HalFile thumbBmp;
-  if (!Storage.openFileForWrite("XTC", getThumbBmpPath(height), thumbBmp)) {
+  if (!Storage.openFileForWrite("XTC", outPath, thumbBmp)) {
     LOG_DBG("XTC", "Failed to create thumb BMP file");
     return false;
   }
@@ -483,7 +485,7 @@ bool Xtc::generateThumbBmp(int height) const {
     thumbBmp.write(rowBuffer, rowSize);
     yieldDuringThumbnail(rowsSinceYield);
   }
-  LOG_DBG("XTC", "Generated thumb BMP (%dx%d): %s", thumbWidth, thumbHeight, getThumbBmpPath(height).c_str());
+  LOG_DBG("XTC", "Generated thumb BMP (%dx%d): %s", thumbWidth, thumbHeight, outPath.c_str());
   return true;
 }
 
