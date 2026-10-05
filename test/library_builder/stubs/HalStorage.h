@@ -200,6 +200,9 @@ class HalStorage {
     file = open(path);
     return bool(file);
   }
+  bool openFileForRead(const char* module, const std::string& path, HalFile& file) {
+    return openFileForRead(module, path.c_str(), file);
+  }
   bool openFileForWrite(const char*, const char* path, HalFile& file) {
     fake::add(path, "");
     file = open(path);

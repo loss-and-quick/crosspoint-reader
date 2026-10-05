@@ -8,6 +8,7 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <Utf8.h>
+#include <Xtc/XtcSeriesFormat.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -287,11 +288,17 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
   return -1;
 }
 
+// Display fields of a series folder, read from its series.idx metadata lines.
+struct SeriesInfo {
+  std::string title;
+  std::string author;
+};
+
 // parentBasename and depth are gone with the folder-as-author rule they served:
 // nothing about a book's surroundings names its author any more.
 [[gnu::noinline]] bool stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize,
                                    const uint16_t folderId, const std::string& fullPath,
-                                   const uint32_t modificationTime) {
+                                   const uint32_t modificationTime, const SeriesInfo* series = nullptr) {
   StagedEntry& entry = *st.stagedEntry;
   memset(&entry, 0, sizeof(entry));
   // The filename is a fallback for the title and nothing else: no parsing, and
@@ -318,6 +325,15 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
         st.prior[priorIndex].fileSize == fileSize && modificationTime != 0 &&
         priorRecord.modificationTime == modificationTime && st.previous->header().foldVersion == CLIX_FOLD_VERSION &&
         st.previous->header().metadataEnabled == st.readMetadata && priorRecord.metadataStatus == expectedStatus;
+  }
+
+  if (series != nullptr && !reuseMetadata) {
+    // The folder name stands in for a missing #title: a record with no stored title
+    // would show the file name "series.idx".
+    title = series->title;
+    author = series->author;
+    titleFromBook = true;
+    authorFromBook = !author.empty();
   }
 
   if (reuseMetadata) {
@@ -424,8 +440,70 @@ struct DedupFrame {
   ~DedupFrame() { state.activeDedupCount = base; }
 };
 
+// Folders are emitted lazily, so only directories that actually hold a book get an
+// id and the ids stay dense. Callers guarantee path.size() <= FOLDER_PATH_BYTES:
+// the walk skips books under an overlong path.
+bool stageFolder(WalkState& st, const std::string& path, uint16_t& folderId) {
+  folderId = st.folderId;
+  const uint8_t pathLen = static_cast<uint8_t>(path.size());
+  if (st.folders.write(&pathLen, 1) != 1 ||
+      st.folders.write(reinterpret_cast<const uint8_t*>(path.data()), pathLen) != pathLen) {
+    LOG_ERR("LIBIDX", "folder stage write failed: %s", path.c_str());
+    st.failed = true;
+    return false;
+  }
+  st.folderBytes += 1u + pathLen;
+  st.folderId++;
+  return true;
+}
+
+constexpr char SERIES_INDEX_NAME[] = "series.idx";
+
+// A folder holding a valid series.idx is one book: a single record whose path is
+// <folder>/series.idx, titled from the idx metadata (folder name as fallback). The
+// walk does not look inside, so the chapter files are not listed separately.
+// Returns false, leaving the folder to the normal walk, when there is no readable
+// idx with the XSERIES header.
+[[gnu::noinline]] bool stageSeriesFolder(WalkState& st, const std::string& path) {
+  if (path.size() > FOLDER_PATH_BYTES) return false;
+  const std::string idxPath = joinLibraryPath(path, SERIES_INDEX_NAME);
+  if (!Storage.exists(idxPath.c_str())) return false;
+
+  SeriesInfo info;
+  uint32_t size = 0;
+  uint32_t modificationTime = 0;
+  {
+    HalFile file;
+    if (!Storage.openFileForRead("LIBIDX", idxPath, file) || file.isDirectory()) return false;
+    size = static_cast<uint32_t>(file.fileSize());
+    modificationTime = file.modificationTime();
+    // ~0.7 KB reader: on the heap rather than in the stack of a recursive walk.
+    auto reader = makeUniqueNoThrow<xtc::series::MetadataReader>();
+    if (!reader) {
+      LOG_ERR("LIBIDX", "OOM: series metadata reader");
+      return false;
+    }
+    reader->readFrom(file);
+    if (!reader->headerOk()) return false;
+    info.title = reader->metadata().title;
+    info.author = reader->metadata().author;
+  }
+  if (size == 0) return false;
+  if (info.title.empty()) {
+    const size_t slash = path.find_last_of('/');
+    info.title = slash == std::string::npos ? path : path.substr(slash + 1);
+    if (info.title.empty()) info.title = stemOf(SERIES_INDEX_NAME);  // the scan root
+  }
+
+  uint16_t folderId = 0;
+  if (!stageFolder(st, path, folderId)) return true;
+  stageRecord(st, SERIES_INDEX_NAME, size, folderId, idxPath, modificationTime, &info);
+  return true;
+}
+
 void walk(WalkState& st, const std::string& path, const int depth) {
   if (st.failed || depth > LIBRARY_MAX_DEPTH || st.books >= CLIX_MAX_RECORDS) return;
+  if (stageSeriesFolder(st, path)) return;
 
   const uint16_t dedupBase = st.activeDedupCount;
   const DedupFrame dedupFrame{st, dedupBase};
@@ -525,20 +603,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
       }
     }
     if (!folderEmitted) {
-      // Folders are emitted lazily, so only directories that actually hold a
-      // book get an id and the ids stay dense.
-      myFolderId = st.folderId;
-      // In range: entries whose folder path exceeds FOLDER_PATH_BYTES were
-      // skipped above, so no book reaches this line with an overlong path.
-      const uint8_t pathLen = static_cast<uint8_t>(path.size());
-      if (st.folders.write(&pathLen, 1) != 1 ||
-          st.folders.write(reinterpret_cast<const uint8_t*>(path.data()), pathLen) != pathLen) {
-        LOG_ERR("LIBIDX", "folder stage write failed: %s", path.c_str());
-        st.failed = true;
-        break;
-      }
-      st.folderBytes += 1u + pathLen;
-      st.folderId++;
+      if (!stageFolder(st, path, myFolderId)) break;
       folderEmitted = true;
     }
     if (!stageRecord(st, name, size, myFolderId, joinLibraryPath(path, name), modificationTime)) break;

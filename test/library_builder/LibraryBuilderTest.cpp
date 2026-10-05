@@ -400,3 +400,118 @@ TEST_F(LibraryBuilderTest, SortAllocationFailureProducesValidDegradedIndex) {
   ASSERT_TRUE(index.open(INDEX));
   EXPECT_EQ(index.bookCount(), 513);
 }
+
+namespace {
+
+struct Row {
+  std::string path;
+  std::string title;
+  std::string author;
+};
+
+// Rows in index order (folded-title order), read back through the public reader.
+std::vector<Row> readRows() {
+  std::vector<Row> rows;
+  LibraryIndexFile index;
+  if (!index.open(INDEX)) return rows;
+  for (uint16_t i = 0; i < index.bookCount(); ++i) {
+    ClixRecord record{};
+    Row row;
+    if (!index.readRecord(i, record) || !index.readPath(record, row.path)) break;
+    if (!index.readTitle(record, row.title)) index.readName(record, row.title);
+    index.readAuthor(record, row.author);
+    rows.push_back(std::move(row));
+  }
+  return rows;
+}
+
+const Row* findRow(const std::vector<Row>& rows, const std::string& path) {
+  for (const auto& row : rows) {
+    if (row.path == path) return &row;
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+TEST_F(LibraryBuilderTest, SeriesFolderIsOneRecordWithIdxMetadata) {
+  fake::add("/manga/Berserk/series.idx",
+            "XSERIES 1\n#title\tBerserk (Deluxe)\n#author\tKentaro Miura\nch1.xtc\t10\tOne\n");
+  fake::add("/manga/Berserk/ch1.xtc");
+  fake::add("/manga/Berserk/ch2.xtc");
+  fake::add("/manga/Berserk/ch3.xtch");
+  fake::add("/manga/Berserk/notes.txt");
+
+  ASSERT_TRUE(buildLibraryIndex("/", stats, false));
+
+  const auto rows = readRows();
+  ASSERT_EQ(rows.size(), 3u);  // a.epub, b.epub, the series
+  const Row* series = findRow(rows, "/manga/Berserk/series.idx");
+  ASSERT_NE(series, nullptr);
+  EXPECT_EQ(series->title, "Berserk (Deluxe)");
+  EXPECT_EQ(series->author, "Kentaro Miura");
+  EXPECT_EQ(findRow(rows, "/manga/Berserk/ch1.xtc"), nullptr);
+  EXPECT_EQ(findRow(rows, "/manga/Berserk/notes.txt"), nullptr);
+  EXPECT_EQ(stats.books, 3);
+}
+
+TEST_F(LibraryBuilderTest, SeriesWithoutTitleFallsBackToFolderName) {
+  fake::add("/manga/Vagabond/series.idx", "XSERIES 1\n");
+  fake::add("/manga/Vagabond/ch1.xtc");
+
+  ASSERT_TRUE(buildLibraryIndex("/", stats, false));
+
+  const Row* series = findRow(readRows(), "/manga/Vagabond/series.idx");
+  ASSERT_NE(series, nullptr);
+  EXPECT_EQ(series->title, "Vagabond");
+}
+
+TEST_F(LibraryBuilderTest, SeriesWalkDoesNotDescendIntoSeriesFolder) {
+  fake::add("/manga/Berserk/series.idx", "XSERIES 1\n#title\tBerserk\n");
+  fake::add("/manga/Berserk/extras/bonus.epub");
+
+  ASSERT_TRUE(buildLibraryIndex("/", stats, false));
+
+  EXPECT_EQ(fake::directoryEntriesByPath["/manga/Berserk/extras"], 0u);
+  EXPECT_EQ(findRow(readRows(), "/manga/Berserk/extras/bonus.epub"), nullptr);
+}
+
+TEST_F(LibraryBuilderTest, InvalidSeriesIdxLeavesFolderToTheNormalWalk) {
+  fake::add("/manga/Broken/series.idx", "not a series\n");
+  fake::add("/manga/Broken/book.txt");
+  fake::add("/manga/Empty/series.idx", "");
+  fake::add("/manga/Empty/book.txt");
+
+  ASSERT_TRUE(buildLibraryIndex("/", stats, false));
+
+  const auto rows = readRows();
+  EXPECT_NE(findRow(rows, "/manga/Broken/book.txt"), nullptr);
+  EXPECT_NE(findRow(rows, "/manga/Empty/book.txt"), nullptr);
+  EXPECT_EQ(findRow(rows, "/manga/Broken/series.idx"), nullptr);
+}
+
+TEST_F(LibraryBuilderTest, SeriesMetadataEditsShowOnRebuildAndUnchangedRebuildKeepsIndex) {
+  fake::add("/manga/Berserk/series.idx", "XSERIES 1\n#title\tOld\n", 5);
+  initial();
+  const auto old = fake::files[INDEX]->bytes;
+
+  ASSERT_TRUE(buildLibraryIndex("/", stats, true));
+  EXPECT_FALSE(stats.indexReplaced);
+  EXPECT_EQ(fake::files[INDEX]->bytes, old);
+
+  fake::add("/manga/Berserk/series.idx", "XSERIES 1\n#title\tNew title\n#author\tMiura\n", 6);
+  ASSERT_TRUE(buildLibraryIndex("/", stats, true));
+  const Row* series = findRow(readRows(), "/manga/Berserk/series.idx");
+  ASSERT_NE(series, nullptr);
+  EXPECT_EQ(series->title, "New title");
+  EXPECT_EQ(series->author, "Miura");
+}
+
+TEST_F(LibraryBuilderTest, SeriesIdxFileNameIsNotIndexedAsALooseBook) {
+  fake::add("/series.idx-not-here.txt");
+  fake::add("/loose/ch1.xtc");
+
+  ASSERT_TRUE(buildLibraryIndex("/", stats, false));
+
+  EXPECT_NE(findRow(readRows(), "/loose/ch1.xtc"), nullptr);
+}

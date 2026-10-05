@@ -4,6 +4,8 @@ add_executable(LibraryBuilderTest
   ${REPO_ROOT}/lib/LibraryIndex/LibraryIndexFile.cpp
   ${REPO_ROOT}/lib/LibraryIndex/LibraryFormat.cpp
   ${REPO_ROOT}/lib/LibraryIndex/LibraryText.cpp
+  ${REPO_ROOT}/lib/FsHelpers/FsHelpers.cpp
+  ${REPO_ROOT}/lib/Xtc/Xtc/XtcSeriesFormat.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp
 )
 target_include_directories(LibraryBuilderTest PRIVATE
@@ -11,6 +13,8 @@ target_include_directories(LibraryBuilderTest PRIVATE
   ${REPO_ROOT}/lib/LibraryIndex
   ${REPO_ROOT}/lib/Serialization
   ${REPO_ROOT}/lib/Utf8
+  ${REPO_ROOT}/lib/Xtc
+  ${REPO_ROOT}/test/fs_helpers/stubs
 )
 target_link_libraries(LibraryBuilderTest PRIVATE crosspoint_test_common GTest::gtest_main)
 gtest_discover_tests(LibraryBuilderTest)

@@ -560,3 +560,8 @@ Reading progress is kept in `.crosspoint/xtcs_<hash of the idx path>/progress.bi
 (little-endian): `u8 version = 1`, `u32 chapter index`, `u32 page`, `u8 name length`,
 chapter file name. The file name re-finds the chapter when the idx is rewritten
 with chapters inserted or removed.
+
+The Library index (`library.idx`) lists a folder holding a valid `series.idx` as one
+book with path `<folder>/series.idx` (title and author from the metadata lines, the
+folder name when there is no `#title`) and does not look inside the folder, so the
+chapter files are not listed separately.
