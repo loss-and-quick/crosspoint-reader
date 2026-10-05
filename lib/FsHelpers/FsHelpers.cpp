@@ -172,6 +172,13 @@ bool hasXtcExtension(std::string_view fileName) {
   return checkFileExtension(fileName, ".xtc") || checkFileExtension(fileName, ".xtch");
 }
 
+bool isXtcSeriesIndex(std::string_view path) {
+  constexpr char NAME[] = "series.idx";
+  const size_t slash = path.find_last_of('/');
+  if (slash != std::string_view::npos) path.remove_prefix(slash + 1);
+  return path.size() == sizeof(NAME) - 1 && checkFileExtension(path, NAME);
+}
+
 bool hasTxtExtension(std::string_view fileName) { return checkFileExtension(fileName, ".txt"); }
 
 bool hasMarkdownExtension(std::string_view fileName) { return checkFileExtension(fileName, ".md"); }

@@ -55,6 +55,10 @@ inline bool hasEpubExtension(const String& fileName) {
 // Check for either .xtc or .xtch extension (case-insensitive)
 bool hasXtcExtension(std::string_view fileName);
 
+// True when the path's last component is "series.idx" (case-insensitive): the
+// index that makes its folder of XTC/XTCH files readable as one book.
+bool isXtcSeriesIndex(std::string_view path);
+
 // Check for .txt extension (case-insensitive)
 bool hasTxtExtension(std::string_view fileName);
 inline bool hasTxtExtension(const String& fileName) {
