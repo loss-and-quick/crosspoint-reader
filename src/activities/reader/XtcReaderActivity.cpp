@@ -13,10 +13,20 @@
 #include "ReaderActivity.h"
 #include "ReaderUtils.h"
 #include "XtcReaderChapterSelectionActivity.h"
+#include "XtcSeriesChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
+namespace {
+bool seriesChapterAvailable(void* ctx, const uint32_t chapter) {
+  return static_cast<const XtcSeries*>(ctx)->isChapterAvailable(chapter);
+}
+}  // namespace
+
 bool XtcReaderActivity::loadBook() {
+  if (FsHelpers::isXtcSeriesIndex(bookPath)) {
+    return loadSeries();
+  }
   auto loadedXtc = makeUniqueNoThrow<Xtc>(bookPath, "/.crosspoint");
   if (!loadedXtc) {
     LOG_ERR("XTR", "Failed to allocate XTC object");
@@ -32,7 +42,111 @@ bool XtcReaderActivity::loadBook() {
   return true;
 }
 
+bool XtcReaderActivity::loadSeries() {
+  auto loadedSeries = makeUniqueNoThrow<XtcSeries>(bookPath, "/.crosspoint");
+  seriesEntry = makeUniqueNoThrow<XtcSeries::Entry>();
+  if (!loadedSeries || !seriesEntry) {
+    LOG_ERR("XTR", "OOM: XTC series");
+    return false;
+  }
+  if (!loadedSeries->load()) {
+    LOG_ERR("XTR", "Failed to load XTC series");
+    return false;
+  }
+  series = std::move(loadedSeries);
+  series->setupCacheDir();
+
+  uint32_t chapter = 0;
+  uint32_t page = 0;
+  series->loadProgress(chapter, page);
+  // The saved chapter may no longer be on the card: resume at the nearest readable one.
+  const uint32_t count = series->chapterCount();
+  int32_t target = xtc::series::findAvailable(chapter, 1, count, &seriesChapterAvailable, series.get());
+  if (target < 0) target = xtc::series::findAvailable(chapter, -1, count, &seriesChapterAvailable, series.get());
+  if (target < 0 || !openSeriesChapter(static_cast<uint32_t>(target), false)) {
+    LOG_ERR("XTR", "No readable chapter in series");
+    return false;
+  }
+  if (static_cast<uint32_t>(target) == chapter && xtc->getPageCount() > 0) {
+    currentPage = std::min(page, xtc->getPageCount() - 1);
+  }
+  return true;
+}
+
+// Replaces `xtc` with chapter `chapter`. Callers other than loadBook() must hold
+// the render lock, since the render task reads `xtc`.
+bool XtcReaderActivity::openSeriesChapter(const uint32_t chapter, const bool atLastPage) {
+  if (!series->readEntry(chapter, *seriesEntry)) {
+    LOG_ERR("XTR", "Bad series entry %lu", static_cast<unsigned long>(chapter));
+    return false;
+  }
+  xtc.reset();  // never more than one chapter file loaded
+  auto chapterXtc = makeUniqueNoThrow<Xtc>(series->chapterPath(seriesEntry->file), "/.crosspoint");
+  if (!chapterXtc || !chapterXtc->load()) {
+    LOG_ERR("XTR", "Failed to open chapter %s", seriesEntry->file);
+    return false;
+  }
+  xtc = std::move(chapterXtc);
+  seriesChapter = chapter;
+  const uint32_t pageCount = xtc->getPageCount();
+  currentPage = atLastPage && pageCount > 0 ? pageCount - 1 : 0;
+  return true;
+}
+
+bool XtcReaderActivity::changeSeriesChapter(const uint32_t chapter, const bool atLastPage) {
+  RenderLock lock(*this);
+  const uint32_t previousChapter = seriesChapter;
+  const uint32_t previousPage = currentPage;
+  if (openSeriesChapter(chapter, atLastPage)) {
+    return true;
+  }
+  if (openSeriesChapter(previousChapter, false)) {
+    currentPage = previousPage;
+  }
+  return false;
+}
+
+bool XtcReaderActivity::seriesPageTurn(const bool isForward) {
+  const auto turn = xtc::series::planTurn(seriesChapter, currentPage, xtc->getPageCount(), isForward,
+                                          series->chapterCount(), &seriesChapterAvailable, series.get());
+  switch (turn.kind) {
+    case xtc::series::Turn::Kind::Page:
+    case xtc::series::Turn::Kind::End:
+      currentPage = turn.page;
+      return true;
+    case xtc::series::Turn::Kind::Chapter:
+      return changeSeriesChapter(turn.chapter, turn.toLastPage);
+    case xtc::series::Turn::Kind::None:
+      break;
+  }
+  return false;
+}
+
+std::string XtcReaderActivity::getBookTitle() const {
+  if (series) return series->getTitle();
+  return xtc ? xtc->getTitle() : "";
+}
+
+std::string XtcReaderActivity::getEndOfBookAnchorPath() const {
+  // After a series, suggest what follows the series folder, not its chapter files.
+  return series ? FsHelpers::extractFolderPath(bookPath) : bookPath;
+}
+
 void XtcReaderActivity::openChapterSelection() {
+  if (series) {
+    auto selection = makeUniqueNoThrow<XtcSeriesChapterSelectionActivity>(renderer, mappedInput, series, seriesChapter);
+    if (!selection) {
+      LOG_ERR("XTR", "OOM: series chapter list");
+      return;
+    }
+    startActivityForResult(std::move(selection), [this](const ActivityResult& result) {
+      if (!result.isCancelled) {
+        changeSeriesChapter(std::get<PageResult>(result.data).page, false);
+        requestUpdate();
+      }
+    });
+    return;
+  }
   if (xtc && xtc->hasChapters() && !xtc->getChapters().empty()) {
     startActivityForResult(std::make_unique<XtcReaderChapterSelectionActivity>(renderer, mappedInput, xtc, currentPage),
                            [this](const ActivityResult& result) {
@@ -74,7 +188,12 @@ XtcReaderActivity::StatusBarInfo XtcReaderActivity::getStatusBarInfo() const {
   const auto sb = SETTINGS.statusBarSpec();
   const int bookPageCount = static_cast<int>(xtc->getPageCount());
   const int bookPage = static_cast<int>(currentPage) + 1;
-  std::string title = sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE ? xtc->getTitle() : "";
+  std::string title = sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE ? getBookTitle() : "";
+
+  if (series) {
+    if (sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::CHAPTER_TITLE) title = seriesEntry->title;
+    return StatusBarInfo{bookPage, bookPageCount, std::move(title)};
+  }
 
   if (!xtc->hasChapters()) {
     return StatusBarInfo{bookPage, bookPageCount, std::move(title)};
@@ -136,7 +255,10 @@ void XtcReaderActivity::renderStatusBarOverlay(GfxRenderer& renderer, const Stat
 
   const int pageCount = static_cast<int>(xtc->getPageCount());
   const int displayPage = static_cast<int>(currentPage) + 1;
-  const float progress = pageCount > 0 ? (static_cast<float>(displayPage) * 100.0f) / pageCount : 0.0f;
+  float progress = pageCount > 0 ? (static_cast<float>(displayPage) * 100.0f) / pageCount : 0.0f;
+  if (series) {
+    progress = xtc::series::seriesPercent(seriesChapter, series->chapterCount(), currentPage, pageCount);
+  }
   const auto pageInfo = getStatusBarInfo();
   GUI.drawStatusBar(renderer, progress, pageInfo.currentPage, pageInfo.pageCount, pageInfo.title, paddingBottom);
 }
@@ -292,6 +414,7 @@ void XtcReaderActivity::renderPage() {
 
 bool XtcReaderActivity::pageTurn(bool isForward) {
   if (!xtc) return false;
+  if (series) return seriesPageTurn(isForward);
   if (isForward) {
     if (currentPage < xtc->getPageCount()) {
       currentPage++;
@@ -308,9 +431,15 @@ bool XtcReaderActivity::pageTurn(bool isForward) {
 
 bool XtcReaderActivity::skipPages(int amount) {
   if (!xtc) return false;
+  const int pageCount = static_cast<int>(xtc->getPageCount());
+  // In a series, a skip stops at the chapter edge; from the edge it crosses into the neighbour.
+  if (series && (amount > 0 ? static_cast<int>(currentPage) + 1 >= pageCount : currentPage == 0)) {
+    return seriesPageTurn(amount > 0);
+  }
+  const int maxPage = series ? pageCount - 1 : pageCount;
   int newPage = static_cast<int>(currentPage) + amount;
   if (newPage < 0) newPage = 0;
-  if (newPage > static_cast<int>(xtc->getPageCount())) newPage = static_cast<int>(xtc->getPageCount());
+  if (newPage > maxPage) newPage = maxPage;
   if (newPage != static_cast<int>(currentPage)) {
     currentPage = static_cast<uint32_t>(newPage);
     return true;
@@ -330,6 +459,15 @@ void XtcReaderActivity::onReturnFromEndOfBook() {
 
 void XtcReaderActivity::saveProgress() const {
   if (!xtc) return;
+  if (series) {
+    uint8_t seriesData[xtc::series::PROGRESS_HEADER_BYTES + XtcSeries::FILE_NAME_BYTES];
+    const size_t size =
+        xtc::series::encodeProgress({seriesChapter, currentPage, seriesEntry->file}, seriesData, sizeof(seriesData));
+    if (size == 0 || !ProgressFile::writeAtomic(series->getCachePath(), seriesData, size)) {
+      LOG_ERR("XTC", "Failed to save series progress: chapter %lu page %lu", seriesChapter, currentPage);
+    }
+    return;
+  }
   uint8_t data[4];
   data[0] = currentPage & 0xFF;
   data[1] = (currentPage >> 8) & 0xFF;
