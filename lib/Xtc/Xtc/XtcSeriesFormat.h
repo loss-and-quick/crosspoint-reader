@@ -6,6 +6,9 @@
  * A series folder holds a `series.idx` text file:
  *
  *   XSERIES 1
+ *   #title\t<series title>        (optional metadata, right after the header)
+ *   #author\t<author>
+ *   #cover\t<cover.bmp>
  *   <file>\t<pages>\t<title>
  *   ...
  *
@@ -13,6 +16,7 @@
  * the series folder and may not exist yet (chapters not copied to the card);
  * readers skip such chapters. `<pages>` is informational (0 = unknown). An idx
  * with only the header line opts the folder into natural file-name order.
+ * Lines starting with '#' are metadata, never chapters; unknown keys are ignored.
  */
 
 #pragma once
@@ -26,6 +30,9 @@
 namespace xtc::series {
 
 constexpr std::string_view HEADER = "XSERIES 1";
+// Metadata value buffers (NUL included); longer values are cut at a UTF-8 boundary.
+constexpr size_t META_TEXT_BYTES = 128;
+constexpr size_t META_COVER_BYTES = 64;
 // Longest idx line inspected; the tail of a longer line (title) is dropped.
 constexpr size_t MAX_LINE_BYTES = 320;
 // Chapters indexed per series; each costs 4 bytes of RAM while reading.
@@ -41,6 +48,32 @@ struct EntryView {
   std::string_view file;
   uint32_t pages = 0;
   std::string_view title;
+};
+
+// Copies at most cap-1 bytes of `in` without splitting a UTF-8 sequence; always NUL-terminates.
+void copyTruncated(char* out, size_t cap, std::string_view in);
+
+struct MetaView {
+  enum class Key : uint8_t { Unknown, Title, Author, Cover };
+  Key key = Key::Unknown;
+  std::string_view value;  // without a trailing '\r'
+};
+
+// True when `line` is a metadata line (starts with '#'). `out.key` names the
+// recognised key ("#title<TAB>value" and so on; Unknown for other keys or a
+// missing tab).
+bool parseMeta(std::string_view line, MetaView& out);
+
+// Series-level metadata, taken from the '#' lines between the header and the
+// first chapter line. Later '#' lines are skipped like any non-chapter line.
+struct Metadata {
+  char title[META_TEXT_BYTES] = {};
+  char author[META_TEXT_BYTES] = {};
+  char cover[META_COVER_BYTES] = {};  // a safe `.bmp` file name inside the series folder
+  bool ended = false;                 // a chapter line was seen
+
+  // Feeds one line after the header. Returns false once metadata is over.
+  bool consumeLine(std::string_view line);
 };
 
 // True for the first idx line (tolerates a UTF-8 BOM and a trailing '\r').
@@ -83,6 +116,44 @@ class LineSplitter {
   bool truncated = false;
 
   void emit();
+};
+
+// Reads the header and metadata of a series idx from a byte stream. Stops caring
+// at the first chapter line, so a caller needs only the first chunk of the file.
+class MetadataReader {
+ public:
+  MetadataReader() : splitter(lineBuf, &onLine, this) {}
+  MetadataReader(const MetadataReader&) = delete;
+  MetadataReader& operator=(const MetadataReader&) = delete;
+
+  void feed(const char* data, size_t len) {
+    if (!done()) splitter.feed(data, len);
+  }
+  void finish() { splitter.finish(); }
+  // Reads `file` (anything with int read(void*, size_t)) until the metadata is complete.
+  template <typename File>
+  void readFrom(File& file) {
+    char chunk[256];
+    while (!done()) {
+      const int n = file.read(chunk, sizeof(chunk));
+      if (n <= 0) break;
+      feed(chunk, static_cast<size_t>(n));
+    }
+    finish();
+  }
+  // True once nothing more can be learned: a chapter line or a bad header was seen.
+  bool done() const { return sawHeader && (!headerOk_ || meta.ended); }
+  bool headerOk() const { return headerOk_; }
+  const Metadata& metadata() const { return meta; }
+
+ private:
+  char lineBuf[MAX_LINE_BYTES] = {};
+  LineSplitter splitter;
+  Metadata meta;
+  bool sawHeader = false;
+  bool headerOk_ = false;
+
+  static void onLine(void* ctx, uint32_t offset, std::string_view line, bool truncated);
 };
 
 // Position-changing decision for a page turn inside a series.
