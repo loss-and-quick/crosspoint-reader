@@ -76,4 +76,12 @@ TEST(SanitizePathComponentForFat32, DoesNotSplitLetterAtBufferLimit) {
   EXPECT_EQ(sanitize(kTitle2103), "Богиня-глюкозы.-Нормализуйте-уров");
 }
 
+TEST(IsXtcSeriesIndex, MatchesOnlyTheExactFileName) {
+  EXPECT_TRUE(FsHelpers::isXtcSeriesIndex("/manga/One/series.idx"sv));
+  EXPECT_TRUE(FsHelpers::isXtcSeriesIndex("SERIES.IDX"sv));
+  EXPECT_FALSE(FsHelpers::isXtcSeriesIndex("/manga/One/myseries.idx"sv));
+  EXPECT_FALSE(FsHelpers::isXtcSeriesIndex("/manga/series.idx/ch1.xtc"sv));
+  EXPECT_FALSE(FsHelpers::isXtcSeriesIndex("series.idx.bak"sv));
+}
+
 }  // namespace
