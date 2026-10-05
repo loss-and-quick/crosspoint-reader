@@ -67,6 +67,8 @@ class Xtc {
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
   bool generateThumbBmp(int height) const;
+  // Same, writing to `outPath` instead of this book's own thumbnail slot.
+  bool generateThumbBmp(int height, const std::string& outPath) const;
 
   // Page access
   uint32_t getPageCount() const;

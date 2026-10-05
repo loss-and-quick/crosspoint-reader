@@ -12,6 +12,7 @@
 #include <Memory.h>
 #include <Utf8.h>
 #include <Xtc.h>
+#include <XtcSeries.h>
 
 #include <algorithm>
 #include <cstring>
@@ -98,6 +99,25 @@ void HomeActivity::fillCoverGridFromLibrary() {
   }
 }
 
+namespace {
+
+// Cover slot of a series record: its `#cover` BMP when present, else the thumbnail
+// slot of its first chapter (generated on demand). Reads only the idx header.
+std::string seriesCoverPath(const std::string& indexPath) {
+  auto series = makeUniqueNoThrow<XtcSeries>(indexPath, "/.crosspoint");
+  if (!series) {
+    LOG_ERR("HOME", "OOM: series cover path");
+    return {};
+  }
+  if (series->loadMetadata()) {
+    std::string cover = series->getCoverBmpPath();
+    if (!cover.empty()) return cover;
+  }
+  return series->getThumbBmpPath();
+}
+
+}  // namespace
+
 void HomeActivity::resolveGridCoverPaths() {
   for (auto& book : recentBooks) {
     if (!book.coverBmpPath.empty()) continue;
@@ -117,6 +137,8 @@ void HomeActivity::resolveGridCoverPaths() {
         continue;
       }
       book.coverBmpPath = xtc->getThumbBmpPath();
+    } else if (FsHelpers::isXtcSeriesIndex(book.path)) {
+      book.coverBmpPath = seriesCoverPath(book.path);
     }
   }
 }
@@ -155,6 +177,28 @@ void HomeActivity::loadGridCover(RecentBook& book, int height, bool& showingLoad
       GUI.fillPopupProgress(renderer, popupRect, 0);
     }
     if (xtc->load() && xtc->generateThumbBmp(height)) {
+      return;
+    }
+  } else if (FsHelpers::isXtcSeriesIndex(book.path)) {
+    auto series = makeUniqueNoThrow<XtcSeries>(book.path, "/.crosspoint");
+    if (!series || !series->load()) {
+      LOG_ERR("HOME", "cover series unavailable");
+      book.coverBmpPath.clear();
+      return;
+    }
+    std::string cover = series->getCoverBmpPath();
+    if (!cover.empty()) {
+      book.coverBmpPath = std::move(cover);
+      return;
+    }
+    book.coverBmpPath = series->getThumbBmpPath();
+    if (Storage.exists(series->getThumbBmpPath(height).c_str())) return;
+    if (!showingLoading) {
+      showingLoading = true;
+      popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+      GUI.fillPopupProgress(renderer, popupRect, 0);
+    }
+    if (series->generateThumbBmp(height)) {
       return;
     }
   }
@@ -214,6 +258,23 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
               RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
               book.coverBmpPath = "";
             }
+            coverRendered = false;
+            requestUpdate();
+          }
+        } else if (FsHelpers::isXtcSeriesIndex(book.path)) {
+          auto series = makeUniqueNoThrow<XtcSeries>(book.path, "/.crosspoint");
+          if (series && series->load()) {
+            if (!showingLoading) {
+              showingLoading = true;
+              popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+            }
+            GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+            if (series->generateThumbBmp(thumbHeight)) {
+              book.coverBmpPath = series->getThumbBmpPath();
+            } else {
+              book.coverBmpPath = "";
+            }
+            RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
             coverRendered = false;
             requestUpdate();
           }

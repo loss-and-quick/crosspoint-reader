@@ -129,6 +129,21 @@ std::string XtcReaderActivity::getBookTitle() const {
   return xtc ? xtc->getTitle() : "";
 }
 
+std::string XtcReaderActivity::getBookAuthor() const {
+  if (series) return series->getAuthor();
+  return xtc ? xtc->getAuthor() : "";
+}
+
+std::string XtcReaderActivity::getBookThumbBmpPath() const {
+  if (series) {
+    // The `#cover` BMP when the folder has one, else the series thumbnail slot that
+    // Home fills from the first chapter.
+    std::string cover = series->getCoverBmpPath();
+    return cover.empty() ? series->getThumbBmpPath() : cover;
+  }
+  return xtc ? xtc->getThumbBmpPath() : "";
+}
+
 std::string XtcReaderActivity::getEndOfBookAnchorPath() const {
   // After a series, suggest what follows the series folder, not its chapter files.
   return series ? FsHelpers::extractFolderPath(bookPath) : bookPath;

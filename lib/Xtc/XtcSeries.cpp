@@ -7,6 +7,7 @@
 #include <functional>
 
 #include "../Memory/Memory.h"
+#include "Xtc.h"
 
 namespace series = xtc::series;
 
@@ -14,18 +15,11 @@ namespace {
 
 constexpr size_t READ_CHUNK_BYTES = 512;
 
-// Copies at most cap-1 bytes without splitting a UTF-8 sequence.
-void copyTruncated(char* out, const size_t cap, std::string_view in) {
-  size_t n = in.size() < cap - 1 ? in.size() : cap - 1;
-  if (n < in.size()) {
-    while (n > 0 && (static_cast<unsigned char>(in[n]) & 0xC0) == 0x80) --n;
-  }
-  memcpy(out, in.data(), n);
-  out[n] = '\0';
-}
+using series::copyTruncated;
 
 struct IndexState {
   std::vector<uint32_t>* offsets;
+  series::Metadata* meta;  // null when the list holds no metadata (generated order list)
   bool sawHeader = false;
   bool headerOk = false;
   uint32_t skipped = 0;
@@ -39,9 +33,10 @@ void onIndexLine(void* ctx, const uint32_t offset, const std::string_view line, 
     return;
   }
   if (!state->headerOk) return;
+  if (state->meta && state->meta->consumeLine(line)) return;
   series::EntryView entry;
   if (!series::parseEntry(line, entry)) {
-    if (!line.empty() && line != "\r") ++state->skipped;
+    if (!line.empty() && line != "\r" && line.front() != '#') ++state->skipped;
     return;
   }
   if (state->offsets->size() >= series::MAX_CHAPTERS) {
@@ -69,7 +64,7 @@ void XtcSeries::setupCacheDir() const {
   if (!Storage.exists(cachePath.c_str())) Storage.mkdir(cachePath.c_str());
 }
 
-bool XtcSeries::indexList(HalFile& file, bool& headerOnly) {
+bool XtcSeries::indexList(HalFile& file, series::Metadata* meta, bool& headerOnly) {
   auto chunk = makeUniqueNoThrow<char[]>(READ_CHUNK_BYTES);
   if (!chunk) {
     LOG_ERR("XTS", "OOM: idx read chunk");
@@ -82,7 +77,7 @@ bool XtcSeries::indexList(HalFile& file, bool& headerOnly) {
   if (estimate > series::MAX_CHAPTERS) estimate = series::MAX_CHAPTERS;
   lineOffsets.reserve(estimate);
 
-  IndexState state{&lineOffsets};
+  IndexState state{&lineOffsets, meta};
   series::LineSplitter splitter(lineBuf, &onIndexLine, &state);
   for (;;) {
     const int n = file.read(chunk.get(), READ_CHUNK_BYTES);
@@ -146,14 +141,19 @@ bool XtcSeries::writeNaturalOrderList() {
 bool XtcSeries::load() {
   listPath = indexPath;
   bool headerOnly = false;
+  series::Metadata meta;  // ~320 bytes of stack, once per load
   {
     HalFile file;
-    if (!Storage.openFileForRead("XTS", indexPath, file) || !indexList(file, headerOnly)) return false;
+    if (!Storage.openFileForRead("XTS", indexPath, file) || !indexList(file, &meta, headerOnly)) return false;
   }
+  if (meta.title[0] != '\0') title = meta.title;
+  author = meta.author;
+  cover = meta.cover;
 
   if (headerOnly) {
     HalFile file;
-    if (!writeNaturalOrderList() || !Storage.openFileForRead("XTS", listPath, file) || !indexList(file, headerOnly)) {
+    if (!writeNaturalOrderList() || !Storage.openFileForRead("XTS", listPath, file) ||
+        !indexList(file, nullptr, headerOnly)) {
       return false;
     }
   }
@@ -238,4 +238,45 @@ bool XtcSeries::loadProgress(uint32_t& chapter, uint32_t& page) const {
   chapter = progress.chapter < chapterCount() ? progress.chapter : chapterCount() - 1;
   page = 0;
   return true;
+}
+
+bool XtcSeries::loadMetadata() {
+  HalFile file;
+  if (!Storage.openFileForRead("XTS", indexPath, file)) return false;
+  // Reader state is ~700 bytes: heap, not the (possibly UI) caller's stack.
+  auto reader = makeUniqueNoThrow<series::MetadataReader>();
+  if (!reader) {
+    LOG_ERR("XTS", "OOM: idx metadata reader");
+    return false;
+  }
+  reader->readFrom(file);
+  if (!reader->headerOk()) return false;
+  const series::Metadata& meta = reader->metadata();
+  if (meta.title[0] != '\0') title = meta.title;
+  author = meta.author;
+  cover = meta.cover;
+  return true;
+}
+
+std::string XtcSeries::getCoverBmpPath() const {
+  if (cover.empty()) return {};
+  std::string path = chapterPath(cover.c_str());
+  return Storage.exists(path.c_str()) ? path : std::string();
+}
+
+std::string XtcSeries::getThumbBmpPath(const int height) const {
+  return cachePath + "/thumb_" + std::to_string(height) + ".bmp";
+}
+
+bool XtcSeries::generateThumbBmp(const int height) const {
+  const std::string out = getThumbBmpPath(height);
+  if (Storage.exists(out.c_str())) return true;
+
+  AvailabilityScan scan(*this);
+  if (series::findAvailable(0, 1, chapterCount(), &isAvailable, &scan) < 0 || !scan.entry) return false;
+  // After a successful probe `scan.entry` holds the first available chapter.
+  auto chapter = makeUniqueNoThrow<Xtc>(chapterPath(scan.entry->file), "/.crosspoint");
+  if (!chapter || !chapter->load()) return false;
+  setupCacheDir();
+  return chapter->generateThumbBmp(height, out);
 }
