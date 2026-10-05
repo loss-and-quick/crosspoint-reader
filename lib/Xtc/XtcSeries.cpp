@@ -53,8 +53,7 @@ void onIndexLine(void* ctx, const uint32_t offset, const std::string_view line, 
 
 }  // namespace
 
-XtcSeries::XtcSeries(std::string indexPath, const std::string& cacheDir)
-    : indexPath(std::move(indexPath)), lineBuf{} {
+XtcSeries::XtcSeries(std::string indexPath, const std::string& cacheDir) : indexPath(std::move(indexPath)), lineBuf{} {
   folder = FsHelpers::extractFolderPath(this->indexPath);
   const size_t slash = folder.find_last_of('/');
   title = slash == std::string::npos ? folder : folder.substr(slash + 1);
@@ -118,8 +117,7 @@ bool XtcSeries::writeNaturalOrderList() {
   // Names are needed together only to sort them; freed before reading starts.
   std::vector<std::string> names;
   names.reserve(candidates);
-  for (auto file = dir.openNextFile(); file && names.size() < series::MAX_FALLBACK_FILES;
-       file = dir.openNextFile()) {
+  for (auto file = dir.openNextFile(); file && names.size() < series::MAX_FALLBACK_FILES; file = dir.openNextFile()) {
     file.getName(lineBuf, sizeof(lineBuf));
     if (file.isDirectory() || lineBuf[0] == '.' || !FsHelpers::hasXtcExtension(std::string_view(lineBuf))) continue;
     names.emplace_back(lineBuf);
@@ -155,8 +153,7 @@ bool XtcSeries::load() {
 
   if (headerOnly) {
     HalFile file;
-    if (!writeNaturalOrderList() || !Storage.openFileForRead("XTS", listPath, file) ||
-        !indexList(file, headerOnly)) {
+    if (!writeNaturalOrderList() || !Storage.openFileForRead("XTS", listPath, file) || !indexList(file, headerOnly)) {
       return false;
     }
   }
@@ -198,7 +195,8 @@ bool XtcSeries::isAvailable(void* scan, const uint32_t index) {
     s->entry = makeUniqueNoThrow<Entry>();
     if (!s->entry || !s->series.openList(s->list)) return false;
   }
-  return s->series.readEntry(s->list, index, *s->entry) && Storage.exists(s->series.chapterPath(s->entry->file).c_str());
+  return s->series.readEntry(s->list, index, *s->entry) &&
+         Storage.exists(s->series.chapterPath(s->entry->file).c_str());
 }
 
 bool XtcSeries::isChapterAvailable(const uint32_t index) const {
