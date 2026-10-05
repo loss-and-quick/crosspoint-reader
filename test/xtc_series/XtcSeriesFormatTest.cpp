@@ -65,13 +65,13 @@ TEST(XtcSeriesEntry, KeepsTabsInsideTitleAndAllowsMissingTitleOrPages) {
 TEST(XtcSeriesEntry, RejectsMalformedAndUnsafeLines) {
   EntryView e;
   EXPECT_FALSE(parseEntry(""sv, e));
-  EXPECT_FALSE(parseEntry("a.xtc"sv, e));                // no tab
-  EXPECT_FALSE(parseEntry("a.epub\t1\tx"sv, e));         // not an XTC file
-  EXPECT_FALSE(parseEntry("../a.xtc\t1\tx"sv, e));       // path escape
-  EXPECT_FALSE(parseEntry("sub/a.xtc\t1\tx"sv, e));      // no subfolders
-  EXPECT_FALSE(parseEntry("a.xtc\t1x\tx"sv, e));         // bad page count
+  EXPECT_FALSE(parseEntry("a.xtc"sv, e));                 // no tab
+  EXPECT_FALSE(parseEntry("a.epub\t1\tx"sv, e));          // not an XTC file
+  EXPECT_FALSE(parseEntry("../a.xtc\t1\tx"sv, e));        // path escape
+  EXPECT_FALSE(parseEntry("sub/a.xtc\t1\tx"sv, e));       // no subfolders
+  EXPECT_FALSE(parseEntry("a.xtc\t1x\tx"sv, e));          // bad page count
   EXPECT_FALSE(parseEntry("a.xtc\t1234567890\tx"sv, e));  // page count overflow
-  EXPECT_FALSE(parseEntry("\t1\tx"sv, e));               // empty file name
+  EXPECT_FALSE(parseEntry("\t1\tx"sv, e));                // empty file name
 }
 
 TEST(XtcSeriesEntry, FormatRoundTripsThroughParse) {
