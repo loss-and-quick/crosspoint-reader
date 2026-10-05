@@ -1,13 +1,17 @@
 #include "XtcSeries.h"
 
+#include <Bitmap.h>
 #include <FsHelpers.h>
 #include <Logging.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <cstring>
 #include <functional>
 
 #include "../Memory/Memory.h"
 #include "Xtc.h"
+#include "Xtc/XtcThumbScaler.h"
 
 namespace series = xtc::series;
 
@@ -264,19 +268,107 @@ std::string XtcSeries::getCoverBmpPath() const {
   return Storage.exists(path.c_str()) ? path : std::string();
 }
 
+std::string XtcSeries::getThumbBmpPath() const {
+  return cachePath + (getCoverBmpPath().empty() ? "/thumb_[HEIGHT].bmp" : "/cthumb_[HEIGHT].bmp");
+}
+
 std::string XtcSeries::getThumbBmpPath(const int height) const {
-  return cachePath + "/thumb_" + std::to_string(height) + ".bmp";
+  return cachePath + (getCoverBmpPath().empty() ? "/thumb_" : "/cthumb_") + std::to_string(height) + ".bmp";
+}
+
+// Streams the cover BMP into a 1-bit thumbnail of at most 0.6*height x height, as
+// Xtc::generateThumbBmp does for a chapter page. Heap: one work block (the Bitmap
+// parser is ~330 B, over the stack budget) and one scratch block holding the source
+// row, its 2-bit packing, one output row and one 4-byte sum per output column.
+bool XtcSeries::generateThumbFromCover(const int height, const std::string& coverPath,
+                                       const std::string& outPath) const {
+  struct Work {
+    HalFile src;
+    HalFile dst;
+    Bitmap bmp;
+    Work() : bmp(src) {}
+  };
+  auto work = makeUniqueNoThrow<Work>();
+  if (!work) {
+    LOG_ERR("XTCS", "OOM: cover thumbnail");
+    return false;
+  }
+  if (!Storage.openFileForRead("XTCS", coverPath, work->src)) return false;
+  const BmpReaderError parsed = work->bmp.parseHeaders();
+  if (parsed != BmpReaderError::Ok) {
+    LOG_ERR("XTCS", "Cover BMP rejected: %s", Bitmap::errorToString(parsed));
+    return false;
+  }
+  const uint32_t srcW = work->bmp.getWidth();
+  const uint32_t srcH = work->bmp.getHeight();
+  if (!Storage.openFileForWrite("XTCS", outPath, work->dst)) return false;
+
+  uint16_t dstW = 0, dstH = 0;
+  bool ok = true;
+  if (!xtc::ThumbScaler::fitSize(srcW, srcH, height * 6 / 10, height, dstW, dstH)) {
+    // Already fits the slot (never upscaled): keep the file as is.
+    ok = work->src.seek(0);
+    uint8_t chunk[128];
+    for (int n; ok && (n = work->src.read(chunk, sizeof(chunk))) > 0;) {
+      ok = work->dst.write(chunk, n) == static_cast<size_t>(n);
+    }
+  } else {
+    const size_t srcRow = work->bmp.getRowBytes();
+    const size_t packedRow = xtc::ThumbScaler::srcRowBytes(srcW);
+    const size_t outRow = xtc::ThumbScaler::outRowBytes(dstW);
+    const size_t words = dstW + (srcRow + packedRow + outRow + 3) / 4;
+    auto scratch = makeUniqueNoThrow<uint32_t[]>(words);
+    if (!scratch) {
+      LOG_ERR("XTCS", "OOM: cover thumbnail rows (%u bytes)", static_cast<unsigned>(words * 4));
+      ok = false;
+    } else {
+      uint32_t* sums = scratch.get();
+      auto* srcBuf = reinterpret_cast<uint8_t*>(sums + dstW);
+      uint8_t* packedBuf = srcBuf + srcRow;
+      uint8_t* outBuf = packedBuf + packedRow;
+      xtc::ThumbScaler scaler(srcW, srcH, dstW, dstH, sums);
+
+      BmpHeader header;
+      // Rows are written in the order the source stores them, so the thumbnail keeps its orientation.
+      createBmpHeader(&header, dstW, dstH, work->bmp.isTopDown() ? BmpRowOrder::TopDown : BmpRowOrder::BottomUp);
+      ok = work->dst.write(reinterpret_cast<const uint8_t*>(&header), sizeof(header)) == sizeof(header);
+      uint8_t rowsSinceYield = 0;
+      for (uint32_t y = 0; ok && y < srcH; y++) {
+        ok = work->bmp.readNextRow(packedBuf, srcBuf) == BmpReaderError::Ok;
+        if (ok && scaler.pushRow(packedBuf, outBuf)) ok = work->dst.write(outBuf, outRow) == outRow;
+        if (++rowsSinceYield >= 8) {
+          rowsSinceYield = 0;
+          vTaskDelay(1);
+        }
+      }
+    }
+  }
+
+  work->src.close();
+  work->dst.close();
+  if (!ok) {
+    LOG_ERR("XTCS", "Failed to scale series cover");
+    Storage.remove(outPath.c_str());
+    return false;
+  }
+  LOG_DBG("XTCS", "Generated series cover thumb %ux%u: %s", static_cast<unsigned>(dstW ? dstW : srcW),
+          static_cast<unsigned>(dstH ? dstH : srcH), outPath.c_str());
+  return true;
 }
 
 bool XtcSeries::generateThumbBmp(const int height) const {
   const std::string out = getThumbBmpPath(height);
   if (Storage.exists(out.c_str())) return true;
 
+  setupCacheDir();
+  const std::string coverPath = getCoverBmpPath();
+  if (!coverPath.empty() && generateThumbFromCover(height, coverPath, out)) return true;
+
   AvailabilityScan scan(*this);
   if (series::findAvailable(0, 1, chapterCount(), &isAvailable, &scan) < 0 || !scan.entry) return false;
-  // After a successful probe `scan.entry` holds the first available chapter.
+  // After a successful probe `scan.entry` holds the first available chapter. Its
+  // thumbnail is written straight to this series' slot at the requested size.
   auto chapter = makeUniqueNoThrow<Xtc>(chapterPath(scan.entry->file), "/.crosspoint");
   if (!chapter || !chapter->load()) return false;
-  setupCacheDir();
   return chapter->generateThumbBmp(height, out);
 }

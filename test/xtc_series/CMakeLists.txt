@@ -1,5 +1,7 @@
 add_executable(XtcSeriesFormatTest
   XtcSeriesFormatTest.cpp
+  XtcThumbScalerTest.cpp
+  ${REPO_ROOT}/lib/Xtc/Xtc/XtcThumbScaler.cpp
   ${REPO_ROOT}/lib/Xtc/Xtc/XtcSeriesFormat.cpp
   ${REPO_ROOT}/lib/FsHelpers/FsHelpers.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp

@@ -136,10 +136,8 @@ std::string XtcReaderActivity::getBookAuthor() const {
 
 std::string XtcReaderActivity::getBookThumbBmpPath() const {
   if (series) {
-    // The `#cover` BMP when the folder has one, else the series thumbnail slot that
-    // Home fills from the first chapter.
-    std::string cover = series->getCoverBmpPath();
-    return cover.empty() ? series->getThumbBmpPath() : cover;
+    // Home fills the per-height slot from the `#cover` BMP, else from the first chapter.
+    return series->getThumbBmpPath();
   }
   return xtc ? xtc->getThumbBmpPath() : "";
 }
