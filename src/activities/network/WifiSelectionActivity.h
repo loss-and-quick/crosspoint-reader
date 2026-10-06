@@ -8,11 +8,11 @@
 
 #include "activities/Activity.h"
 #include "components/UiAppHost.h"
+#include "network/WifiConnector.h"
 #include "util/ButtonNavigator.h"
 
 struct Rect;
 struct ThemeMetrics;
-struct WifiCredential;
 
 // Structure to hold WiFi network information
 struct WifiNetworkInfo {
@@ -91,17 +91,16 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   // True from the Confirm press that stops auto-connect until that button is released.
   bool manualNetworkListRequested = false;
 
-  // Saved SSIDs already attempted during the current auto-connect session.
-  std::vector<std::string> autoAttemptedSsids;
-
   // Save/forget prompt selection (0 = Yes, 1 = No)
   int savePromptSelection = 0;
   int forgetPromptSelection = 0;
 
+  // Joins networks, scans and orders saved networks for auto-connect; this screen only reports its progress.
+  WifiConnector connector;
+
   // Connection timeout
   static constexpr unsigned long CONNECTION_TIMEOUT_MS = 15000;
   static constexpr unsigned long AUTO_CONNECTION_TIMEOUT_MS = 7000;
-  unsigned long connectionStartTime = 0;
 
   // The UiAppHost app hosts the network list and the save/forget prompts
   // (themed rows and dialogs, touch routing); every other state keeps its
@@ -123,19 +122,17 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   void renderConnected(const Rect* screen, const ThemeMetrics* metrics) const;
   void renderConnectionFailed(const Rect* screen, const ThemeMetrics* metrics) const;
 
-  void startWifiScan(bool autoScan = false);
+  void startWifiScan();
+  void showScanning();
   void processWifiScanResults();
+  void followSavedConnect();
   void appendHiddenNetworkEntry();
   void selectNetwork(int index);
   void promptHiddenSsid();
   void promptPasswordEntry();
   void attemptConnection();
   void checkConnectionStatus();
-  bool tryAutoConnectCredential(const WifiCredential& cred);
-  bool tryNextSavedNetworkFromScan();
-  void handleAutoConnectFailure();
   void showNetworkListFromAutoConnect();
-  bool hasAttemptedAutoSsid(const std::string& ssid) const;
   static std::string getSignalStrengthIndicator(int32_t rssi);
 
   void onComplete(bool connected);

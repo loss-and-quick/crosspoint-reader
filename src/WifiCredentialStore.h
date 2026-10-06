@@ -52,6 +52,10 @@ class WifiCredentialStore : public PersistableStore<WifiCredentialStore> {
   std::optional<WifiCredential> getCredentialAt(size_t index) const;
   std::optional<std::string> getSsidAt(size_t index) const;
   size_t getCredentialCount() const;
+  // Position of a saved network (what getCredentialAt takes), or getCredentialCount() when it is not saved.
+  size_t indexOf(const char* ssid) const;
+  // The same for the last connected network.
+  size_t lastConnectedIndex() const;
   // Password-free snapshot for display/API consumers.
   std::vector<WifiCredentialSummary> getCredentialSummaries() const;
 
@@ -59,7 +63,7 @@ class WifiCredentialStore : public PersistableStore<WifiCredentialStore> {
   bool hasSavedCredential(const std::string& ssid) const;
 
   // Last connected network
-  void setLastConnectedSsid(const std::string& ssid);
+  void setLastConnectedSsid(const char* ssid);
   std::string getLastConnectedSsid() const;
 };
 

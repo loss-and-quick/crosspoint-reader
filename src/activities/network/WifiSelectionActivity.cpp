@@ -94,7 +94,7 @@ void WifiSelectionActivity::onEnter() {
   // for both
   {
     RenderLock lock(*this);
-    WIFI_STORE.loadFromFile();
+    WifiConnector::savedCount(true);
   }
 
   // Reset state
@@ -113,9 +113,6 @@ void WifiSelectionActivity::onEnter() {
   forgetPromptSelection = 0;
   autoConnecting = false;
   manualNetworkListRequested = false;
-  autoAttemptedSsids.clear();
-  const size_t savedCredentialCount = WIFI_STORE.getCredentialCount();
-  autoAttemptedSsids.reserve(savedCredentialCount);
 
   // Read the hardware-derived station MAC directly. WiFi.macAddress() depends
   // on the STA netif already existing, but this screen is entered while WiFi
@@ -145,16 +142,10 @@ void WifiSelectionActivity::onEnter() {
   // Attempt to auto-connect to known networks. Try the last successful
   // network first for speed, then scan and try any visible saved networks by
   // signal strength. The user can interrupt this and show the scan result.
-  if (allowAutoConnect && savedCredentialCount != 0) {
-    const std::string lastSsid = WIFI_STORE.getLastConnectedSsid();
-    if (!lastSsid.empty()) {
-      const auto cred = WIFI_STORE.findCredential(lastSsid);
-      if (cred && tryAutoConnectCredential(*cred)) {
-        return;
-      }
-    }
-
-    startWifiScan(true);
+  WifiConnector::Options options;
+  options.joinTimeoutMs = AUTO_CONNECTION_TIMEOUT_MS;
+  if (allowAutoConnect && connector.beginSaved(options)) {
+    followSavedConnect();
     return;
   }
 
@@ -169,7 +160,7 @@ void WifiSelectionActivity::onExit() {
 
   // Stop any ongoing WiFi scan
   LOG_DBG("WIFI", "Deleting WiFi scan...");
-  WiFi.scanDelete();
+  connector.cancelScan();
   LOG_DBG("WIFI", "Free heap after scanDelete: %d bytes", ESP.getFreeHeap());
 
   // Note: We do NOT disconnect WiFi here - the parent activity
@@ -179,8 +170,13 @@ void WifiSelectionActivity::onExit() {
   LOG_DBG("WIFI", "Free heap at onExit end: %d bytes", ESP.getFreeHeap());
 }
 
-void WifiSelectionActivity::startWifiScan(const bool autoScan) {
-  autoConnecting = autoScan;
+void WifiSelectionActivity::startWifiScan() {
+  autoConnecting = false;
+  showScanning();
+  connector.startScan();
+}
+
+void WifiSelectionActivity::showScanning() {
   manualNetworkListRequested = false;
   listNav.reset();
   state = WifiSelectionState::SCANNING;
@@ -189,25 +185,18 @@ void WifiSelectionActivity::startWifiScan(const bool autoScan) {
   networkStatuses.clear();
   networkRowItems.clear();
   requestUpdate();
-
-  // Set WiFi mode to station
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(100);
-
-  // Start async scan
-  WiFi.scanNetworks(true);  // true = async scan
 }
 
 void WifiSelectionActivity::processWifiScanResults() {
-  const int16_t scanResult = WiFi.scanComplete();
+  const WifiConnector::Event event = connector.poll();
 
-  if (scanResult == WIFI_SCAN_RUNNING) {
+  if (event == WifiConnector::Event::None) {
     // Scan still in progress
     return;
   }
 
-  if (scanResult == WIFI_SCAN_FAILED) {
+  if (event == WifiConnector::Event::ScanFailed) {
+    connector.finishScan();
     networks.clear();
     realNetworkCount = 0;
     appendHiddenNetworkEntry();
@@ -218,6 +207,8 @@ void WifiSelectionActivity::processWifiScanResults() {
     requestUpdate();
     return;
   }
+
+  const int16_t scanResult = WiFi.scanComplete();
 
   // Scan complete, process results — deduplicate in-place, keeping strongest signal
   networks.clear();
@@ -260,9 +251,10 @@ void WifiSelectionActivity::processWifiScanResults() {
   appendHiddenNetworkEntry();
   rebuildNetworkRowItems();
 
-  WiFi.scanDelete();
-
-  if (autoConnecting && !manualNetworkListRequested && tryNextSavedNetworkFromScan()) {
+  // Frees the scan; the connector then joins the next saved network in range unless the user asked for the list.
+  connector.finishScan();
+  if (connector.state() == WifiConnector::State::Joining) {
+    followSavedConnect();
     return;
   }
 
@@ -387,68 +379,42 @@ void WifiSelectionActivity::promptHiddenSsid() {
                          });
 }
 
-bool WifiSelectionActivity::hasAttemptedAutoSsid(const std::string& ssid) const {
-  return std::find(autoAttemptedSsids.begin(), autoAttemptedSsids.end(), ssid) != autoAttemptedSsids.end();
-}
-
-bool WifiSelectionActivity::tryAutoConnectCredential(const WifiCredential& cred) {
-  if (hasAttemptedAutoSsid(cred.ssid)) {
-    return false;
-  }
-
-  LOG_DBG("WIFI", "Attempting saved network: %s", cred.ssid.c_str());
-  autoAttemptedSsids.push_back(cred.ssid);
-  selectedSSID = cred.ssid;
-  enteredPassword = cred.password;
-  selectedRequiresPassword = !cred.password.empty();
-  usedSavedPassword = true;
-  autoConnecting = true;
-  manualNetworkListRequested = false;
-  attemptConnection();
-  requestUpdate();
-  return true;
-}
-
-bool WifiSelectionActivity::tryNextSavedNetworkFromScan() {
-  for (const auto& network : networks) {
-    if (!network.hasSavedPassword || hasAttemptedAutoSsid(network.ssid)) {
-      continue;
-    }
-
-    const auto cred = WIFI_STORE.findCredential(network.ssid);
-    if (cred && tryAutoConnectCredential(*cred)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void WifiSelectionActivity::handleAutoConnectFailure() {
-  LOG_DBG("WIFI", "Saved network failed: %s", selectedSSID.c_str());
-  WiFi.disconnect();
-
-  if (!networks.empty()) {
-    if (tryNextSavedNetworkFromScan()) {
+// Mirrors what the connector does next in the saved-network sequence: join, scan or give up.
+void WifiSelectionActivity::followSavedConnect() {
+  switch (connector.state()) {
+    case WifiConnector::State::Joining:
+      LOG_DBG("WIFI", "Attempting saved network: %s", connector.ssid());
+      selectedSSID = connector.ssid();
+      enteredPassword.clear();
+      usedSavedPassword = true;
+      autoConnecting = true;
+      manualNetworkListRequested = false;
+      state = WifiSelectionState::AUTO_CONNECTING;
+      connectedIP.clear();
+      connectionError.clear();
+      requestUpdate();
       return;
-    }
-    autoConnecting = false;
-    state = WifiSelectionState::NETWORK_LIST;
-    selectedNetworkIndex = 0;
-    requestUpdate();
-    return;
+    case WifiConnector::State::Scanning:
+      showScanning();
+      autoConnecting = true;
+      return;
+    default:
+      autoConnecting = false;
+      state = WifiSelectionState::NETWORK_LIST;
+      selectedNetworkIndex = 0;
+      requestUpdate();
+      return;
   }
-
-  startWifiScan(true);
 }
 
 void WifiSelectionActivity::showNetworkListFromAutoConnect() {
   LOG_DBG("WIFI", "User requested manual network list");
-  WiFi.disconnect();
+  connector.cancel();
   autoConnecting = false;
   manualNetworkListRequested = true;
 
   if (networks.empty()) {
-    startWifiScan(false);
+    startWifiScan();
     manualNetworkListRequested = true;
     return;
   }
@@ -459,39 +425,12 @@ void WifiSelectionActivity::showNetworkListFromAutoConnect() {
 }
 
 void WifiSelectionActivity::attemptConnection() {
-  state = autoConnecting ? WifiSelectionState::AUTO_CONNECTING : WifiSelectionState::CONNECTING;
-  connectionStartTime = millis();
+  state = WifiSelectionState::CONNECTING;
   connectedIP.clear();
   connectionError.clear();
   requestUpdate();
 
-  WiFi.persistent(false);  // Credentials are managed by WifiCredentialStore; suppress SDK NVS auto-connect
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true, true);  // Abort any in-progress SDK auto-connect and clear NVS-saved SSID
-  delay(100);
-
-  // Scan all channels so networks with multiple APs use the strongest matching
-  // BSSID instead of the first match found by the framework's default fast scan.
-  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
-  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
-
-  // Set hostname so routers show "CrossPoint-Reader-AABBCCDDEEFF" instead of "esp32-XXXXXXXXXXXX"
-  uint8_t mac[6] = {};
-  const esp_err_t macResult = esp_read_mac(mac, ESP_MAC_WIFI_STA);
-  if (macResult == ESP_OK) {
-    char hostname[sizeof("CrossPoint-Reader-") + 12];
-    snprintf(hostname, sizeof(hostname), "CrossPoint-Reader-%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3],
-             mac[4], mac[5]);
-    WiFi.setHostname(hostname);
-  } else {
-    LOG_ERR("WIFI", "Failed to read station MAC for hostname (err=%d)", static_cast<int>(macResult));
-  }
-
-  if (selectedRequiresPassword && !enteredPassword.empty()) {
-    WiFi.begin(selectedSSID.c_str(), enteredPassword.c_str());
-  } else {
-    WiFi.begin(selectedSSID.c_str());
-  }
+  connector.join(selectedSSID.c_str(), selectedRequiresPassword ? enteredPassword.c_str() : "", CONNECTION_TIMEOUT_MS);
 }
 
 void WifiSelectionActivity::checkConnectionStatus() {
@@ -499,9 +438,9 @@ void WifiSelectionActivity::checkConnectionStatus() {
     return;
   }
 
-  const wl_status_t status = WiFi.status();
+  const WifiConnector::Event event = connector.poll();
 
-  if (status == WL_CONNECTED) {
+  if (event == WifiConnector::Event::Connected) {
     // Successfully connected
     IPAddress ip = WiFi.localIP();
     char ipStr[16];
@@ -537,7 +476,7 @@ void WifiSelectionActivity::checkConnectionStatus() {
     // we use SPI for both
     {
       RenderLock lock(*this);
-      WIFI_STORE.setLastConnectedSsid(selectedSSID);
+      connector.rememberConnected();
     }
 
     // Every station join is a window where plugin senders are deliverable, so
@@ -561,32 +500,25 @@ void WifiSelectionActivity::checkConnectionStatus() {
     return;
   }
 
-  if (status == WL_CONNECT_FAILED || status == WL_NO_SSID_AVAIL) {
-    connectionError = tr(STR_ERROR_GENERAL_FAILURE);
-    if (status == WL_NO_SSID_AVAIL) {
-      connectionError = tr(STR_ERROR_NETWORK_NOT_FOUND);
+  if (event == WifiConnector::Event::JoinFailed) {
+    switch (connector.error()) {
+      case WifiConnector::Error::NetworkNotFound:
+        connectionError = tr(STR_ERROR_NETWORK_NOT_FOUND);
+        break;
+      case WifiConnector::Error::Timeout:
+        connectionError = tr(STR_ERROR_CONNECTION_TIMEOUT);
+        break;
+      default:
+        connectionError = tr(STR_ERROR_GENERAL_FAILURE);
+        break;
     }
+    LOG_DBG("WIFI", "Network failed: %s", selectedSSID.c_str());
     if (autoConnecting) {
-      handleAutoConnectFailure();
+      followSavedConnect();
       return;
     }
     state = WifiSelectionState::CONNECTION_FAILED;
     requestUpdate();
-    return;
-  }
-
-  // Check for timeout
-  const unsigned long timeoutMs = autoConnecting ? AUTO_CONNECTION_TIMEOUT_MS : CONNECTION_TIMEOUT_MS;
-  if (millis() - connectionStartTime > timeoutMs) {
-    WiFi.disconnect();
-    connectionError = tr(STR_ERROR_CONNECTION_TIMEOUT);
-    if (autoConnecting) {
-      handleAutoConnectFailure();
-      return;
-    }
-    state = WifiSelectionState::CONNECTION_FAILED;
-    requestUpdate();
-    return;
   }
 }
 
@@ -594,13 +526,14 @@ void WifiSelectionActivity::loop() {
   // Check scan progress
   if (state == WifiSelectionState::SCANNING) {
     if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-      WiFi.scanDelete();
+      connector.cancelScan();
       onComplete(false);
       return;
     }
     if (autoConnecting && mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
       autoConnecting = false;
       manualNetworkListRequested = true;
+      connector.stopSavedSequence();
       requestUpdate();
     }
     processWifiScanResults();
@@ -611,7 +544,7 @@ void WifiSelectionActivity::loop() {
   if (state == WifiSelectionState::CONNECTING || state == WifiSelectionState::AUTO_CONNECTING) {
     if (state == WifiSelectionState::AUTO_CONNECTING) {
       if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-        WiFi.disconnect();
+        connector.cancel();
         onComplete(false);
         return;
       }

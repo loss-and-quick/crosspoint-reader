@@ -179,6 +179,20 @@ size_t WifiCredentialStore::getCredentialCount() const {
   return credentials.size();
 }
 
+size_t WifiCredentialStore::indexOf(const char* ssid) const {
+  std::lock_guard<std::mutex> lock(credentialMutex);
+  size_t index = 0;
+  while (index < credentials.size() && credentials[index].ssid != ssid) index++;
+  return index;
+}
+
+size_t WifiCredentialStore::lastConnectedIndex() const {
+  std::lock_guard<std::mutex> lock(credentialMutex);
+  size_t index = 0;
+  while (index < credentials.size() && credentials[index].ssid != lastConnectedSsid) index++;
+  return index;
+}
+
 std::vector<WifiCredentialSummary> WifiCredentialStore::getCredentialSummaries() const {
   std::lock_guard<std::mutex> lock(credentialMutex);
   std::vector<WifiCredentialSummary> summaries;
@@ -195,7 +209,7 @@ bool WifiCredentialStore::hasSavedCredential(const std::string& ssid) const {
                  [&ssid](const WifiCredential& cred) { return cred.ssid == ssid; }) != credentials.end();
 }
 
-void WifiCredentialStore::setLastConnectedSsid(const std::string& ssid) {
+void WifiCredentialStore::setLastConnectedSsid(const char* ssid) {
   {
     std::lock_guard<std::mutex> lock(credentialMutex);
     if (lastConnectedSsid == ssid) return;
