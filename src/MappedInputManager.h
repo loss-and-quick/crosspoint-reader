@@ -90,6 +90,8 @@ class MappedInputManager {
   RowTouch colTouch(int& col, int left, int colStep, int colCount, int yStart, int yEnd, int colWidth = 0) const;
 
   SwipeDir wasSwipe(int* startX = nullptr, int* startY = nullptr) const;
+  // Fetch the pending swipe (if any) and map both endpoints to logical screen coords
+  bool decodeSwipe(int& sx, int& sy, int& ex, int& ey) const;
   // Back = left-to-right swipe anchored at the left edge. Public so swipe-mode
   // page turns (reader) can exclude it from a plain SwipeDir::Right.
   bool wasBackGesture() const;
@@ -143,8 +145,6 @@ class MappedInputManager {
   bool wasEdgeSwipe(freeink::ui::ScreenEdge edge) const;
   bool wasTopEdgeDownSwipe() const;
   bool wasBottomEdgeUpSwipe() const;
-  // Fetch the pending swipe (if any) and map both endpoints to logical screen coords
-  bool decodeSwipe(int& sx, int& sy, int& ex, int& ey) const;
 #if FREEINK_CAP_TOUCH
   bool wasPowerConfirmClick() const;
 #endif

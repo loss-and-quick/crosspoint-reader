@@ -19,6 +19,7 @@
 class UiTabListActivity : public UiListActivity {
  public:
   void onEnter() override;
+  void loop() override;
 
  protected:
   // Tab-bar action; subclass actions start at ACTION_TAB_USER.
@@ -77,7 +78,17 @@ class UiTabListActivity : public UiListActivity {
 
   // First tab shown while the tab bar scrolls horizontally (labels wider than the screen).
   int tabFirstVisible = 0;
+  // Active tab when the window was last scrolled by a swipe (-1 = follow the active tab).
+  int tabWindowManualFor = -1;
+  // Geometry of the last tab-bar build, for swipe hit-testing.
+  int tabBandTop = 0;
+  int tabBandBottom = 0;
+  int tabSlotWidth = 0;
+  int tabVisibleCount = 0;
+  int tabTotalCount = 0;
 
  private:
+  // A horizontal swipe starting on the tab band scrolls the visible tab window; true when consumed.
+  bool handleTabBarSwipe();
   static void tabActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
 };

@@ -6,6 +6,7 @@
 #include <cassert>
 
 #include "MappedInputManager.h"
+#include "activities/TabWindow.h"
 #include "components/UITheme.h"
 
 namespace fui = freeink::ui;
@@ -15,20 +16,8 @@ constexpr int16_t TOUCH_TAB_BAR_HEIGHT = 50;
 // Air a tab label needs inside its slot before the bar scrolls instead of squeezing it.
 constexpr int kTabLabelPad = 12;
 
-// Number of equal-width tabs that fit the bar (all of them when they do); at least two so the bar stays a bar.
-int visibleTabCount(const int total, const int slotMin, const int width) {
-  if (slotMin <= 0 || slotMin * total <= width) return total;
-  const int fit = width / slotMin;
-  return fit < 2 ? (total < 2 ? total : 2) : fit;
-}
-
-// First visible tab of a window of `visible` tabs that keeps `active` in view, moving as little as possible.
-int scrollTabWindow(int first, const int visible, const int total, const int active) {
-  if (active < first) first = active;
-  if (active >= first + visible) first = active - visible + 1;
-  if (first > total - visible) first = total - visible;
-  return first < 0 ? 0 : first;
-}
+using tabwindow::scrollTabWindow;
+using tabwindow::visibleTabCount;
 }  // namespace
 
 UiTabListActivity::UiTabListActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -63,6 +52,30 @@ void UiTabListActivity::tabActionTrampoline(const fui::ActionEvent& event, void*
   self->onTabAction(event.value);
 }
 
+void UiTabListActivity::loop() {
+  if (handleTabBarSwipe()) return;
+  UiListActivity::loop();
+}
+
+bool UiTabListActivity::handleTabBarSwipe() {
+  // Only a horizontal swipe that starts inside the tab band scrolls the window; it never selects a tab.
+  if (tabBandBottom <= tabBandTop || tabVisibleCount >= tabTotalCount) return false;
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe != MappedInputManager::SwipeDir::Left && swipe != MappedInputManager::SwipeDir::Right) return false;
+  int sx = 0;
+  int sy = 0;
+  int ex = 0;
+  int ey = 0;
+  if (!mappedInput.decodeSwipe(sx, sy, ex, ey) || sy < tabBandTop || sy >= tabBandBottom) return false;
+  const int next = tabwindow::swipeScroll(tabFirstVisible, ex - sx, tabSlotWidth, tabVisibleCount, tabTotalCount);
+  if (next != tabFirstVisible) {
+    tabFirstVisible = next;
+    tabWindowManualFor = activeTab();
+    requestUpdate();
+  }
+  return true;
+}
+
 void UiTabListActivity::onRowAction(const fui::ActionEvent& event) {
   activeNav().selected = event.value + 1;  // ring position, not row index
   if (event.longPress) {
@@ -84,6 +97,11 @@ void UiTabListActivity::navigateButtons() {
   if (mappedInput.wasPressed(MappedInputManager::Button::NavNext) ||
       mappedInput.wasPressed(MappedInputManager::Button::NavPrevious)) {
     navigationStartedOnTabs = ringPos() == 0;
+  }
+  // Buttons re-follow the active tab after a manual swipe scroll of the tab window.
+  if (tabWindowManualFor >= 0 && (mappedInput.wasPressed(MappedInputManager::Button::NavNext) ||
+                                  mappedInput.wasPressed(MappedInputManager::Button::NavPrevious))) {
+    tabWindowManualFor = -1;
   }
   // Buttons walk the tab band (index 0) plus the rows (1..listCount).
   const int ringSize = listCount() + 1;
@@ -159,7 +177,14 @@ void UiTabListActivity::buildTabBar(UiScreen& screen) {
     const int slotMin = widest + kTabLabelPad + tabProps.tabInset.left + tabProps.tabInset.right + tabProps.gap;
     const int slotsWidth = screen.frame().screen().width - 2 * side;
     count = visibleTabCount(total, slotMin, slotsWidth);
-    tabFirstVisible = scrollTabWindow(tabFirstVisible, count, total, activeTab());
+    // A swipe-scrolled window stays put (even with the active tab out of view) until the active tab changes or a
+    // button moves the selection.
+    if (tabWindowManualFor >= 0 && tabWindowManualFor != activeTab()) tabWindowManualFor = -1;
+    tabFirstVisible = tabWindowManualFor >= 0 ? tabwindow::clampFirst(tabFirstVisible, count, total)
+                                              : scrollTabWindow(tabFirstVisible, count, total, activeTab());
+    tabTotalCount = total;
+    tabVisibleCount = count;
+    tabSlotWidth = count > 0 ? slotsWidth / count : 0;
     first = tabFirstVisible;
   }
   for (int i = 0; i < count; i++) {
@@ -216,6 +241,8 @@ void UiTabListActivity::buildTabBar(UiScreen& screen) {
   tabProps.tabStyles = tabStyles;
   const fui::Rect contentTabRect = screen.takeTop(tabBand);
   const fui::Rect frameRect = screen.frame().screen();
+  tabBandTop = contentTabRect.y;
+  tabBandBottom = contentTabRect.y + contentTabRect.height;
   const fui::Rect safeRect = screen.frame().safeRect();
   // The tab background reaches the display edges, but stops before the button labels.
   const fui::Rect tabRect{static_cast<int16_t>(contentTabRect.x - safeRect.x), contentTabRect.y,
@@ -229,7 +256,6 @@ void UiTabListActivity::buildTabBar(UiScreen& screen) {
   // Leave space on both sides of the tab labels and selection highlights.
   // Draw the line below the tabs across the full background width.
   const auto divider = static_cast<int16_t>(std::max(1, metrics.headerUnderlineSize));
-  const auto side = static_cast<int16_t>(metrics.contentSidePadding);
   const fui::Rect slotsRect{static_cast<int16_t>(contentTabRect.x + side), tabRect.y,
                             static_cast<int16_t>(contentTabRect.width - 2 * side),
                             static_cast<int16_t>(tabRect.height - divider)};
