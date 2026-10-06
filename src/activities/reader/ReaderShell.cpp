@@ -9,6 +9,7 @@
 #include "KOReaderCredentialStore.h"
 #include "ReaderActivity.h"
 #include "ReaderUtils.h"
+#include "components/UITheme.h"
 #include "util/ScreenshotUtil.h"
 
 void ReaderActivity::openGoToPercent(const int initialPercent) {
@@ -102,4 +103,26 @@ void ReaderActivity::openMenu() {
     return;
   }
   openReaderMenu();
+}
+
+void ReaderActivity::drawStatusBar(const StatusBarContent& content) const {
+  GUI.drawStatusBar(renderer, content.bookProgress, content.page, content.pageCount, content.title,
+                    content.paddingBottom, content.textYOffset, content.fillMargin, content.bookmarked,
+                    content.pageCountEstimated);
+}
+
+std::string ReaderActivity::statusBarTitle(const char* bookTitle, const char* chapterTitle) const {
+  if (autoTurnActive) {
+    char text[48];
+    snprintf(text, sizeof(text), "%s%lu", tr(STR_AUTO_TURN_ENABLED), 60UL * 1000UL / autoTurnIntervalMs);
+    return text;
+  }
+  switch (SETTINGS.statusBarSpec().titleMode) {
+    case CrossPointSettings::STATUS_BAR_TITLE::CHAPTER_TITLE:
+      return chapterTitle;
+    case CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE:
+      return bookTitle;
+    default:
+      return {};
+  }
 }

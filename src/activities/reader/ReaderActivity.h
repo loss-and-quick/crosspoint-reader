@@ -63,6 +63,24 @@ class ReaderActivity : public Activity {
   virtual void applyInitialOrientation();
   virtual void onEndOfBookRendered() {}
 
+  // ---- Status bar. A reader supplies the numbers, the shell draws the bar with the shared
+  // status-bar settings and decides what the title lane shows.
+  struct StatusBarContent {
+    float bookProgress = 0;
+    int page = 0;  // 1-based page in the chapter
+    int pageCount = 0;
+    std::string title;
+    int paddingBottom = 0;
+    int textYOffset = 0;
+    bool fillMargin = true;
+    bool bookmarked = false;
+    bool pageCountEstimated = false;
+  };
+  void drawStatusBar(const StatusBarContent& content) const;
+  // The title lane text for the configured title mode (book, chapter or none), or the auto-turn
+  // notice while automatic page turning runs.
+  std::string statusBarTitle(const char* bookTitle, const char* chapterTitle) const;
+
   // ---- Reader shell: behaviour every reader shares, whatever produces its pages.
   // A reader supplies its pages and positions through the virtual hooks above and below; the
   // shell owns go-to-percent, the screenshot request, automatic page turning and the input loop.

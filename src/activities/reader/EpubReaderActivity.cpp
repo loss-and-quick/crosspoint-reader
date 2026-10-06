@@ -2171,8 +2171,8 @@ void EpubReaderActivity::renderStatusBar() const {
   const float sectionChapterProg = (pageCount > 0) ? (static_cast<float>(currentPage) / pageCount) : 0;
   const float bookProgress = epub ? (epub->calculateProgress(currentSpineIndex, sectionChapterProg) * 100) : 0;
 
-  std::string title;
   int textYOffset = 0;
+  std::string overrideTitle;
   const auto sb = SETTINGS.statusBarSpec();
 
   const auto note = linkNoteTitle.draw(sb.showsTitle(), bleturner::linkNote());
@@ -2180,32 +2180,39 @@ void EpubReaderActivity::renderStatusBar() const {
     const auto peer = bleturner::linked();
     char connected[64];
     snprintf(connected, sizeof(connected), tr(STR_BT_CONNECTED_TO), peer.name[0] != '\0' ? peer.name : peer.addr);
-    title = connected;
+    overrideTitle = connected;
   } else if (note == bleturner::LinkNote::LowMemory) {
-    title = tr(STR_BT_LOW_MEMORY);
+    overrideTitle = tr(STR_BT_LOW_MEMORY);
   } else if (note != bleturner::LinkNote::None) {
-    title = note == bleturner::LinkNote::Connecting ? tr(STR_BT_CONNECTING) : tr(STR_BT_FAILED);
-  } else if (autoTurnActive) {
-    title = tr(STR_AUTO_TURN_ENABLED) + std::to_string(60 * 1000 / autoTurnIntervalMs);
+    overrideTitle = note == bleturner::LinkNote::Connecting ? tr(STR_BT_CONNECTING) : tr(STR_BT_FAILED);
+  }
+
+  if (autoTurnActive) {
     const uint8_t statusBarHeight = UITheme::getInstance().getStatusBarHeight();
     if (statusBarHeight == 0 || statusBarHeight == UITheme::getInstance().getProgressBarHeight()) {
       textYOffset += UITheme::getInstance().getMetrics().statusBarVerticalMargin;
     }
-  } else if (sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::CHAPTER_TITLE) {
-    title = tr(STR_UNNAMED);
-    if (epub) {
-      const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
-      if (tocIndex != -1) {
-        const auto tocItem = epub->getTocItem(tocIndex);
-        title = tocItem.title;
-      }
-    }
-  } else if (sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE) {
-    title = epub ? epub->getTitle() : "";
+  }
+  std::string tocTitle;
+  bool inToc = false;
+  if (!autoTurnActive && epub &&
+      SETTINGS.statusBarSpec().titleMode == CrossPointSettings::STATUS_BAR_TITLE::CHAPTER_TITLE) {
+    const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
+    inToc = tocIndex != -1;
+    if (inToc) tocTitle = epub->getTocItem(tocIndex).title;
   }
 
-  GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, true, currentPageBookmarked,
-                    section ? section->isBuilding() : false);
+  StatusBarContent content;
+  content.bookProgress = bookProgress;
+  content.page = currentPage;
+  content.pageCount = static_cast<int>(pageCount);
+  content.title = !overrideTitle.empty() ? overrideTitle
+                                         : statusBarTitle(epub ? epub->getTitle().c_str() : "",
+                                                          inToc ? tocTitle.c_str() : tr(STR_UNNAMED));
+  content.textYOffset = textYOffset;
+  content.bookmarked = currentPageBookmarked;
+  content.pageCountEstimated = section ? section->isBuilding() : false;
+  drawStatusBar(content);
 }
 
 // ---------------------------------------------------------------------------
