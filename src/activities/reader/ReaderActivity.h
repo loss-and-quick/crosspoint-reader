@@ -164,6 +164,12 @@ class ReaderActivity : public Activity {
   void discardOverlayPage();
   void handleOverlayInput();
   void renderOverlay();
+  void renderOverlayChrome();
+  void renderOverlayPopup();
+  void flipFrameForNightChrome();
+  // True when night mode is on but the frame is shown in normal polarity, so the overlay has to
+  // be drawn inverted by hand.
+  virtual bool overlayFramePolarityFlipped() const { return false; }
   void paintOverlayPopup();
   // Repaints the open overlay over the page the reader just drew. Call at the end of a page render.
   void paintOverlayOnPage();

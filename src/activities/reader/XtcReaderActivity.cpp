@@ -58,6 +58,13 @@ void XtcReaderActivity::openChapterList() {
 
 void XtcReaderActivity::applyInitialOrientation() { renderer.setOrientation(GfxRenderer::Orientation::Portrait); }
 
+bool XtcReaderActivity::overlayFramePolarityFlipped() const {
+  return xtc && xtc::reading::planPolarity(SETTINGS.screenInverted != 0,
+                                           SETTINGS.comicsNightMode == CrossPointSettings::COMICS_INVERT,
+                                           xtc->getBitDepth(), pageShown())
+                    .invertChrome;
+}
+
 bool XtcReaderActivity::wantsInvertedDisplay(const bool nightMode) const {
   return xtc::reading::planPolarity(nightMode, SETTINGS.comicsNightMode == CrossPointSettings::COMICS_INVERT,
                                     xtc ? xtc->getBitDepth() : 1, pageShown())
@@ -215,6 +222,8 @@ void XtcReaderActivity::renderErrorScreen(const StrId message) {
   renderer.clearScreen();
   renderer.drawCenteredText(UI_12_FONT_ID, 300, I18N.get(message), true, EpdFontFamily::BOLD);
   paintStatusBar(pagePlacement(0));
+  // 2-bit pages keep the panel in normal polarity; the whole error screen is chrome.
+  if (overlayFramePolarityFlipped()) renderer.invertRegion(0, 0, renderer.getScreenWidth(), renderer.getScreenHeight());
   renderer.displayBuffer();
   paintOverlayOnPage();
 }

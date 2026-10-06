@@ -147,7 +147,26 @@ void ReaderActivity::closeOverlayToPage() {
   requestUpdate();  // redraw the clean page
 }
 
+// A reader whose frame is not inverted at output while night mode is on (2-bit pages) paints the
+// overlay through a flipped frame: invert everything, draw the chrome in normal polarity, invert
+// back. The page returns unchanged and the chrome comes out in the night look.
 void ReaderActivity::renderOverlay() {
+  flipFrameForNightChrome();
+  renderOverlayChrome();
+  flipFrameForNightChrome();
+}
+
+void ReaderActivity::renderOverlayPopup() {
+  flipFrameForNightChrome();
+  overlayPopup.render(renderer);
+  flipFrameForNightChrome();
+}
+
+void ReaderActivity::flipFrameForNightChrome() {
+  if (overlayFramePolarityFlipped()) renderer.invertRegion(0, 0, renderer.getScreenWidth(), renderer.getScreenHeight());
+}
+
+void ReaderActivity::renderOverlayChrome() {
   if (!pageReady() || !toolbarUi) return;
 
   ReaderToolbarUi::Model model;
@@ -466,7 +485,7 @@ void ReaderActivity::handleOverlayInput() {
 void ReaderActivity::paintOverlayPopup() {
   RenderLock lock;
   settleOverlayRefresh();
-  overlayPopup.render(renderer);
+  renderOverlayPopup();
   pushOverlayRefresh();
 }
 // The More panel carries everything the classic list menu offers except the
@@ -628,7 +647,7 @@ void ReaderActivity::paintOverlayOnPage() {
   overlayPageStored = renderer.storeBwBuffer();
   renderOverlay();
   // An open option picker rides on top of the freshly drawn panel.
-  if (overlayPopup.isActive()) overlayPopup.render(renderer);
+  if (overlayPopup.isActive()) renderOverlayPopup();
   // FAST, same as openOverlay: HALF's inverting pass flashes the sheet (white, in night mode) on
   // every repaint under an open panel. Any AA residue a FAST differential leaves under the chrome
   // has not shown in practice; restore a HALF cleanup here if text ever visibly ghosts through

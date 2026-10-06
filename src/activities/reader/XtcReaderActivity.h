@@ -67,6 +67,7 @@ class XtcReaderActivity final : public ReaderActivity {
   bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;
   bool wantsInvertedDisplay(bool nightMode) const override;
+  bool overlayFramePolarityFlipped() const override;
 
   ScreenshotInfo getScreenshotInfo() const override;
 };
