@@ -58,46 +58,6 @@ class EpubReaderActivity final : public ReaderActivity {
   unsigned long bookmarkMessageTime = 0UL;
   bool pendingReadFolderMove = false;
 
-  // Toolbar reader menu (SETTINGS.readerMenuStyle == READER_MENU_TOOLBAR): drawn
-  // over the page instead of pushing the full-screen list menu. Select opens the
-  // Toolbar; its tools open the Contents/Text/More bottom-sheet panels.
-  enum class Overlay { None, Toolbar, Contents, Text, More };
-  Overlay overlay = Overlay::None;
-  int focusedTool = 0;  // toolbar tool focus: 0=Contents, 1=Text, 2=More
-  int panelIndex = 0;   // selected row within the active panel
-  // Panel list navigation: a tap steps one row, a hold jumps PANEL_HOLD_STEP rows in one go
-  // (a contents list runs to hundreds of chapters). One jump per hold, not a repeat -- every
-  // step repaints the panel, so repeating is bounded by the e-ink refresh anyway and reads as
-  // sluggish. True once a hold has jumped, so the release that ends it is swallowed.
-  static constexpr unsigned long PANEL_HOLD_MS = 1500;
-  static constexpr int PANEL_HOLD_STEP = 10;
-  bool panelHoldJumped = false;
-  // Whether the panel draws its cursor row. Button boards always do; touch
-  // boards only once a button has moved it, so a tapped row is not left inverted.
-  bool panelCursorShown = false;
-  // FreeInkUI chrome + tap targets for the overlay; created when it opens,
-  // released when it closes.
-  std::unique_ptr<ReaderToolbarUi> toolbarUi;
-  // Modal option picker over the panel (same component the Settings screens
-  // use), for enum rows: font size / line spacing / alignment / orientation /
-  // auto page turn. Toggle rows stay one-tap toggles, as in Settings.
-  OptionPopup overlayPopup;
-  // True while a clean-page snapshot (renderer.storeBwBuffer) backs the open
-  // overlay, letting panel->toolbar steps restore the page without a full
-  // re-render. Discarded on close / whenever the page under the overlay changes.
-  bool overlayPageStored = false;
-  // A background build step lent the framebuffer: it came back white while the panel still shows the
-  // page. Until renderBook() redraws, nothing may be painted straight onto it. Set by the loop task,
-  // cleared by the render task.
-  std::atomic<bool> pageBufferStale{false};
-  // True while a deferred overlay chrome refresh (pushOverlayRefresh) may still
-  // be running on the panel. settleOverlayRefresh() must run before the
-  // framebuffer is touched or another differential refresh is pushed.
-  bool overlayRefreshPending = false;
-  void pushOverlayRefresh();
-  void settleOverlayRefresh();
-  std::vector<ReaderMenuActivity::MenuItem> moreItems;
-
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
   std::vector<PageLink> currentPageLinks;
@@ -160,38 +120,36 @@ class EpubReaderActivity final : public ReaderActivity {
   void rememberCurrentContentOffset();
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
   void jumpToPercent(int percent) override;
-  void onReaderMenuConfirm(ReaderMenuActivity::MenuAction action);
+  void runMenuAction(ReaderMenuActivity::MenuAction action) override;
+  void openReaderMenu() override;
   int currentTocIndex() const;
-  ReaderMenuActivity::Capabilities menuCapabilities() const;
   // Live section position, or the values cached before a child screen
   // released the section.
   ChapterPosition chapterPosition() const;
   int bookPercentFor(const ChapterPosition& position) const;
-  void openReaderMenu() override;
   ReaderMenuActivity::Capabilities menuCapabilities() const override;
-  // Toolbar reader menu (see Overlay above).
-  bool usesToolbarMenu() const override;
-  void openOverlay(Overlay target);
-  void closeOverlayToPage();
-  void discardOverlayPage();
-  void handleOverlayInput();
-  void renderOverlay();
   std::string currentChapterTitle() const;
   // Text panel rows (font, size, line spacing, alignment, focus reading).
-  std::string textRowName(int row) const;
-  std::string textRowValue(int row) const;
+  int textPanelCount() const override;
+  std::string textRowName(int row) const override;
+  std::string textRowValue(int row) const override;
+  void textRowCheckbox(int row, freeink::ui::ListItem& item) const override;
+  void activateTextRow(int row) override;
   void showTextRowPopup(int row);
+  // Toolbar content.
+  void toolbarInfo(ToolbarInfo& info) const override;
+  int scrubCount() const override;
+  int scrubPosition() const override;
+  void scrubTo(int index) override;
+  int contentsCount() const override;
+  int contentsCurrentIndex() const override;
+  std::string contentsRowText(int index) const override;
+  void activateContentsItem(int index) override;
   // Persist + re-paginate + re-render under the open panel (live preview).
   void applyTextSettingLive();
-  void paintOverlayPopup();
   // Persist the reader text settings, (re)load the selected SD font, and
   // re-paginate the current chapter so changes apply without re-opening the book.
   void applyReaderTextSettings();
-  // More panel rows.
-  void buildMoreActions();
-  std::string moreRowName(int row) const;
-  std::string moreRowValue(int row) const;
-  void activateMoreRow(int row);
   void openFootnoteSelect(bool reopenMenuOnCancel);
   void openDictionaryWordSelect();
   void startClipSelection(int initialX = -1, int initialY = -1,
@@ -221,8 +179,6 @@ class EpubReaderActivity final : public ReaderActivity {
   bool handleTapInput() override;
   bool handleBackOverride() override;
   bool handleExtraKeys(bool endOfBookMenuOpen) override;
-  bool handleMenuOverlay() override;
-  bool openToolbarOverlay() override;
   void bookmarkAction(bool guardRepeat) override;
   void lookupAction(bool guardRepeat) override;
   void applyInitialOrientation() override;

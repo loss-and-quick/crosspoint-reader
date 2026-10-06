@@ -97,6 +97,9 @@ unsigned long ReaderActivity::confirmLongPressThreshold(const ReaderMenuActivity
 // screen, else the list menu.
 void ReaderActivity::openMenu() {
   pendingManualTurn = 0;
-  if (usesToolbarMenu() && pageReady() && openToolbarOverlay()) return;
+  if (usesToolbarMenu() && pageReady()) {
+    openOverlay(Overlay::Toolbar);
+    return;
+  }
   openReaderMenu();
 }

@@ -111,12 +111,16 @@ void ReaderToolbarUi::buildToolRow(UiScreen& screen, const fui::LayoutAnchor anc
   // must land on the same x either way, or the icons jump when a tap swaps
   // the toolbar for a panel.
   const fui::Rect row = screen.take(anchor, kToolRowH).inset(fui::Insets{0, sideInset, 0, sideInset});
-  const int16_t slotW = static_cast<int16_t>(row.width / kToolCount);
+  int visible = 0;
+  for (int i = 0; i < kToolCount; ++i) visible += (model_.toolMask >> i) & 1;
+  const int16_t slotW = static_cast<int16_t>(row.width / (visible > 0 ? visible : 1));
   // Theme radius as-is (the frontlight panel pattern); the fill clamps to
   // the shape's own height so round themes cannot overshoot.
   const uint8_t pillRadius = tokens.controlRadius;
+  int slotIndex = 0;
   for (int i = 0; i < kToolCount; ++i) {
-    const fui::Rect slot{static_cast<int16_t>(row.x + slotW * i), row.y, slotW, row.height};
+    if (!((model_.toolMask >> i) & 1)) continue;
+    const fui::Rect slot{static_cast<int16_t>(row.x + slotW * slotIndex++), row.y, slotW, row.height};
     if (i == model_.activeTool) {
       screen.target().stroke(slot.inset(fui::Insets{4, kToolPillInset, 4, kToolPillInset}),
                              fui::Paint::solid(fui::Color::Black), 2, pillRadius);

@@ -13,11 +13,11 @@ class MappedInputManager;
 // Menu Style -> Toolbar), painted over the page that is already on screen:
 //
 //  - Toolbar: a bottom sheet holding a chapter scrub row (< capsule >) and a
-//    Contents / Text / More tile row; the page above it stays untouched.
+//    Contents / Text / More tile row (Text only for readers with text); the page above it stays untouched.
 //  - Panel: a taller bottom sheet with a title, a paged row list (name left,
 //    value right) and the same tile row as a switcher.
 //
-// EpubReaderActivity owns the state (which overlay, selection, row contents)
+// The reader shell owns the state (which overlay, selection, row contents)
 // and the physical-button handling; this class owns the layout, the tap
 // targets FreeInkUI registers for it, and the translation of dispatched
 // actions back into the small event set the reader acts on. Nothing here
@@ -45,6 +45,8 @@ class ReaderToolbarUi : public UiAppHost {
     // Button boards keep the theme's denser list row height (as every other
     // list does there); touch boards use FreeInkUI's finger-sized rows.
     bool denseRows = false;
+    // Tools shown in the tile row, bit 0 Contents, 1 Text, 2 More. A reader without a text panel hides Text.
+    uint8_t toolMask = 0x7;
   };
 
   struct Routed {

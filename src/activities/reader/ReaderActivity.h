@@ -4,11 +4,14 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "EndOfBookOptions.h"
 #include "ReaderMenuActivity.h"
 #include "ReaderSession.h"
+#include "ReaderToolbarUi.h"
 #include "activities/Activity.h"
+#include "components/OptionPopup.h"
 
 class ReaderActivity : public Activity {
   friend class ActivityManager;  // turns pages for a Bluetooth remote (ActivityManager::remoteTurn)
@@ -119,12 +122,82 @@ class ReaderActivity : public Activity {
   int8_t pendingManualTurn = 0;
   bool pendingManualTurnTouch = false;
 
-  // Toolbar menu hooks of the reader (see readerLoop).
-  virtual bool usesToolbarMenu() const { return false; }
-  virtual bool handleMenuOverlay() { return false; }
-  virtual bool openToolbarOverlay() { return false; }
   void openMenu();
   void readerLoop();
+
+  // ---- Toolbar reader menu (SETTINGS.readerMenuStyle == READER_MENU_TOOLBAR): a toolbar and
+  // bottom-sheet panels drawn over the page that is on screen. The shell owns the state and the
+  // input; the reader provides the content below.
+  enum class Overlay { None, Toolbar, Contents, Text, More };
+  Overlay overlay = Overlay::None;
+  bool usesToolbarMenu() const;
+  void openOverlay(Overlay target);
+  void closeOverlayToPage();
+  void discardOverlayPage();
+  void handleOverlayInput();
+  void renderOverlay();
+  void paintOverlayPopup();
+  // Repaints the open overlay over the page the reader just drew. Call at the end of a page render.
+  void paintOverlayOnPage();
+  bool handleMenuOverlay();
+
+  struct ToolbarInfo {
+    std::string chapterTitle;
+    char pageInfo[32] = {};  // "12/40   51%"
+    int progressPermille = 0;
+  };
+  static void formatPageInfo(ToolbarInfo& info, int page, int pageCount, int percent);
+  virtual void toolbarInfo(ToolbarInfo& info) const {}
+  // Chapter scrub of the toolbar: the unit is chapters, or pages when the book has no chapters.
+  virtual int scrubCount() const { return 0; }
+  virtual int scrubPosition() const { return 0; }
+  virtual void scrubTo(int index) {}
+  // Contents panel.
+  virtual int contentsCount() const { return 0; }
+  virtual int contentsCurrentIndex() const { return 0; }
+  virtual std::string contentsRowText(int index) const { return {}; }
+  virtual void activateContentsItem(int index) {}
+  // Text panel; only readers that lay text out have one.
+  virtual int textPanelCount() const { return 0; }
+  virtual std::string textRowName(int row) const { return {}; }
+  virtual std::string textRowValue(int row) const { return {}; }
+  virtual void textRowCheckbox(int row, freeink::ui::ListItem& item) const {}
+  virtual void activateTextRow(int row) {}
+
+  int focusedTool = 0;  // toolbar tool focus: 0=Contents, 1=Text, 2=More
+  int panelIndex = 0;   // selected row within the active panel
+  // A tap steps one row; a hold jumps PANEL_HOLD_STEP rows once (a contents list runs to
+  // hundreds of chapters). True once a hold has jumped, so the release that ends it is swallowed.
+  static constexpr unsigned long PANEL_HOLD_MS = 1500;
+  static constexpr int PANEL_HOLD_STEP = 10;
+  bool panelHoldJumped = false;
+  // Whether the panel draws its cursor row. Button boards always do; touch boards only once a
+  // button has moved it, so a tapped row is not left inverted.
+  bool panelCursorShown = false;
+  // FreeInkUI chrome and tap targets; created when the overlay opens, released when it closes.
+  std::unique_ptr<ReaderToolbarUi> toolbarUi;
+  // Modal option picker over a panel, for enum rows.
+  OptionPopup overlayPopup;
+  // True while a clean-page snapshot (renderer.storeBwBuffer) backs the open overlay, letting
+  // panel to toolbar steps restore the page without a re-render.
+  bool overlayPageStored = false;
+  // True while a deferred overlay refresh may still be running on the panel; settle it before the
+  // framebuffer is touched or another differential refresh is pushed.
+  bool overlayRefreshPending = false;
+  // A background step lent the framebuffer: it came back white while the panel still shows the
+  // page. Nothing may be painted onto it until the reader redraws.
+  std::atomic<bool> pageBufferStale{false};
+  void pushOverlayRefresh();
+  void settleOverlayRefresh();
+  // More panel: the list menu rows without the ones that have their own tool.
+  std::vector<ReaderMenuActivity::MenuItem> moreItems;
+  void buildMoreActions();
+  std::string moreRowName(int row) const;
+  std::string moreRowValue(int row) const;
+  void activateMoreRow(int row);
+
+  // A menu row chosen from the list menu or the toolbar's More panel.
+  virtual void runMenuAction(ReaderMenuActivity::MenuAction action) {}
 
   bool handleBackNavigation();
   /** True while the end-of-book suggestion menu is on screen and owning input. */
