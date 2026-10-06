@@ -39,12 +39,12 @@
 #include "OpdsTokenStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
-#include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/WifiConnector.h"
 #include "platform/UsbSerialJtagHandoff.h"
 #include "util/ButtonNavigator.h"
 #include "util/PluginEvents.h"
@@ -363,6 +363,8 @@ static bool loadSleepFrameBuffer() {
   return true;
 }
 
+static constexpr uint32_t SLEEP_EVENT_WIFI_BUDGET_MS = 10000;  // Wi-Fi join (and scan) limit before sleep
+
 // Plugin-event delivery on the way into deep sleep. sleep.enter is delivered
 // now — over the live connection, or by bringing WiFi up when a plugin
 // subscribes (e.g. fetching a fresh /sleep.bmp so THIS sleep shows it — the
@@ -402,19 +404,14 @@ static void deliverSleepPluginEvents(const bool allowNetwork) {
   // same sleep, and a progress-sync plugin usually subscribes to it alone.
   if (!pluginevents::wantsConnectAny()) return;
   if (powerManager.getBatteryPercentage() < 20) return;
-  // Sleep can be the first WiFi use since boot or deep-sleep wake.
-  WIFI_STORE.loadFromFile();
-  const auto cred = WIFI_STORE.findCredential(WIFI_STORE.getLastConnectedSsid());
-  if (!cred) return;
+  if (WifiConnector::savedCount() == 0) return;
 
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(cred->ssid.c_str(), cred->password.c_str());
-  const unsigned long joinDeadline = millis() + 10000;
-  while (WiFi.status() != WL_CONNECTED && millis() < joinDeadline) {
-    delay(100);
-  }
-  if (WiFi.status() == WL_CONNECTED) {
+  WifiConnector wifi;
+  WifiConnector::Options options;
+  options.joinTimeoutMs = SLEEP_EVENT_WIFI_BUDGET_MS;
+  if (wifi.beginSaved(options) && wifi.waitForConnection(SLEEP_EVENT_WIFI_BUDGET_MS)) {
+    wifi.rememberConnected();
     trustedtime::startSync();  // snap the clock floor while the network is up
     pluginevents::drain(&renderer);
   } else {
