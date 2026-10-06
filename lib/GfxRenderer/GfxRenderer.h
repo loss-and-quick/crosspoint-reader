@@ -328,6 +328,9 @@ class GfxRenderer {
   // Counter-invert content images in the logical framebuffer so output-level
   // dark mode leaves their original polarity unchanged.
   void preserveImagePolarity(int x, int y, int width, int height) const;
+  // Flips every pixel of a logical rectangle in the framebuffer (BW mode), regardless of the
+  // panel polarity. Clipped to the screen; a no-op while a grayscale strip target is active.
+  void invertRegion(int x, int y, int width, int height) const;
   void fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state = true) const;
 
   // Snapshot / restore a screen-coordinate framebuffer region (byte-aligned in

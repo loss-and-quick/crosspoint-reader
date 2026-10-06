@@ -50,6 +50,10 @@ class Activity {
   virtual bool requiresExclusiveStorageLoop() const { return false; }
   virtual bool isReaderActivity() const { return false; }
   virtual bool acceptsRemoteInput() const { return false; }
+  // Output polarity this screen wants for the current night-mode state. Night mode
+  // inverts every screen by default; a screen whose content cannot go through the
+  // inverted path (2-bit grayscale pages) opts out and paints the night look itself.
+  virtual bool wantsInvertedDisplay(const bool nightMode) const { return nightMode; }
   // Returns true when the activity schedules its own forced refresh.
   virtual bool handleForcedRefresh() { return false; }
   virtual bool isHomeActivity() const { return false; }

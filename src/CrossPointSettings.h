@@ -56,6 +56,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     XTC_STATUS_BAR_MODE_COUNT
   };
 
+  enum COMICS_NIGHT_MODE { COMICS_KEEP_ORIGINAL = 0, COMICS_INVERT = 1, COMICS_NIGHT_MODE_COUNT };
+
   enum STATUS_BAR_CLOCK_MODE {
     STATUS_BAR_CLOCK_HIDE = 0,
     STATUS_BAR_CLOCK_RIGHT = 1,
@@ -255,6 +257,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Night mode: inverted output polarity, applied to every activity per
   // render by ActivityManager. The sleep screen opts out itself.
   uint8_t screenInverted = 0;
+  // Night mode for XTC/XTCH comics: keep the page as drawn or invert it with the UI.
+  uint8_t comicsNightMode = COMICS_KEEP_ORIGINAL;
   // Sleep screen cover mode settings
   uint8_t sleepScreenCoverMode = FIT;
   // Sleep screen cover filter

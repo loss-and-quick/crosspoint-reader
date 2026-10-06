@@ -67,6 +67,8 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
   // applies it to every activity), so it lives in the Display category.
   emit(SettingInfo::Toggle(StrId::STR_NIGHT_MODE, &CrossPointSettings::screenInverted, "screenInverted",
                            StrId::STR_CAT_DISPLAY));
+  emit(SettingInfo::Enum(StrId::STR_COMICS_NIGHT_MODE, &CrossPointSettings::comicsNightMode,
+                         {StrId::STR_KEEP_ORIGINAL, StrId::STR_INVERT}, "comicsNightMode", StrId::STR_CAT_READER));
 
   // --- Reader ---
   // Built-in font-family entry. Replaced per-call with a registry-aware
