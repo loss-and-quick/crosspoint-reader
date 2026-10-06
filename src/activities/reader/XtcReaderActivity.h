@@ -22,6 +22,7 @@ class XtcReaderActivity final : public ReaderActivity {
   };
 
   void renderPage();
+  void renderErrorScreen(StrId message);
   xtc::reading::Placement pagePlacement(int pageHeight) const;
   void paintStatusBar(const xtc::reading::Placement& placement) const;
   ChapterPage chapterPage() const;
@@ -41,8 +42,17 @@ class XtcReaderActivity final : public ReaderActivity {
   ReaderMenuActivity::Capabilities menuCapabilities() const override;
   void openChapterList() override;
 
-  // The XTC reader has no toolbar content yet; it always opens the list menu.
-  bool usesToolbarMenu() const override { return false; }
+  // Toolbar menu content. The scrub and the Contents panel run over the chapters inside the file,
+  // or (scrub only) over pages when the book has none; the Text tile is hidden.
+  bool hasInnerChapters() const { return xtc && xtc->hasChapters() && !xtc->getChapters().empty(); }
+  void toolbarInfo(ToolbarInfo& info) const override;
+  int scrubCount() const override;
+  int scrubPosition() const override;
+  void scrubTo(int index) override;
+  int contentsCount() const override;
+  int contentsCurrentIndex() const override;
+  std::string contentsRowText(int index) const override;
+  void activateContentsItem(int index) override;
 
  public:
   explicit XtcReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,

@@ -158,7 +158,7 @@ class ReaderActivity : public Activity {
   // input; the reader provides the content below.
   enum class Overlay { None, Toolbar, Contents, Text, More };
   Overlay overlay = Overlay::None;
-  virtual bool usesToolbarMenu() const;
+  bool usesToolbarMenu() const;
   void openOverlay(Overlay target);
   void closeOverlayToPage();
   void discardOverlayPage();

@@ -103,6 +103,45 @@ ReaderActivity::MenuState XtcReaderActivity::menuState() const {
   return {getBookTitle(), info.page, info.pageCount, currentPercent()};
 }
 
+void XtcReaderActivity::toolbarInfo(ToolbarInfo& info) const {
+  if (!xtc) return;
+  const ChapterPage page = chapterPage();
+  const int percent = currentPercent();
+  info.chapterTitle = page.title[0] != '\0' ? std::string(page.title) : getBookTitle();
+  formatPageInfo(info, page.page, page.pageCount, percent);
+  info.progressPermille = percent * 10;
+}
+
+int XtcReaderActivity::scrubCount() const {
+  if (!xtc) return 0;
+  return static_cast<int>(hasInnerChapters() ? xtc->getChapters().size() : xtc->getPageCount());
+}
+
+int XtcReaderActivity::scrubPosition() const {
+  return hasInnerChapters() ? XtcChapterList::indexForPage(*xtc, currentPage) : static_cast<int>(currentPage);
+}
+
+void XtcReaderActivity::scrubTo(const int index) {
+  RenderLock lock(*this);
+  currentPage = hasInnerChapters() ? xtc->getChapters()[index].startPage : static_cast<uint32_t>(index);
+}
+
+int XtcReaderActivity::contentsCount() const {
+  return hasInnerChapters() ? static_cast<int>(xtc->getChapters().size()) : 0;
+}
+
+int XtcReaderActivity::contentsCurrentIndex() const { return scrubPosition(); }
+
+std::string XtcReaderActivity::contentsRowText(const int index) const {
+  const auto& name = xtc->getChapters()[index].name;
+  return name.empty() ? tr(STR_UNNAMED) : name;
+}
+
+void XtcReaderActivity::activateContentsItem(const int index) {
+  RenderLock lock(*this);
+  currentPage = xtc->getChapters()[index].startPage;
+}
+
 xtc::reading::Placement XtcReaderActivity::pagePlacement(const int pageHeight) const {
   using xtc::reading::BarPosition;
   BarPosition position = BarPosition::Hide;
@@ -145,6 +184,16 @@ void XtcReaderActivity::paintStatusBar(const xtc::reading::Placement& placement)
   drawStatusBar(content);
 }
 
+// A page that cannot be shown still gets the reader's chrome: the status bar and the toolbar menu, so the
+// reader can be left or moved on from the error.
+void XtcReaderActivity::renderErrorScreen(const StrId message) {
+  renderer.clearScreen();
+  renderer.drawCenteredText(UI_12_FONT_ID, 300, I18N.get(message), true, EpdFontFamily::BOLD);
+  paintStatusBar(pagePlacement(0));
+  renderer.displayBuffer();
+  paintOverlayOnPage();
+}
+
 void XtcReaderActivity::renderPage() {
   const uint16_t pageWidth = xtc->getPageWidth();
   const uint16_t pageHeight = xtc->getPageHeight();
@@ -160,9 +209,7 @@ void XtcReaderActivity::renderPage() {
   uint8_t* pageBuffer = static_cast<uint8_t*>(malloc(pageBufferSize));
   if (!pageBuffer) {
     LOG_ERR("XTR", "Failed to allocate page buffer (%lu bytes)", pageBufferSize);
-    renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_MEMORY_ERROR), true, EpdFontFamily::BOLD);
-    renderer.displayBuffer();
+    renderErrorScreen(StrId::STR_MEMORY_ERROR);
     return;
   }
 
@@ -171,9 +218,7 @@ void XtcReaderActivity::renderPage() {
     LOG_ERR("XTR", "Failed to load page %lu: bufferSize=%lu bitDepth=%u error=%s", currentPage, pageBufferSize,
             bitDepth, xtc::errorToString(xtc->getLastError()));
     free(pageBuffer);
-    renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
-    renderer.displayBuffer();
+    renderErrorScreen(StrId::STR_PAGE_LOAD_ERROR);
     return;
   }
 
@@ -266,6 +311,7 @@ void XtcReaderActivity::renderPage() {
     free(pageBuffer);
 
     LOG_DBG("XTR", "Rendered page %lu/%lu (2-bit grayscale)", currentPage + 1, xtc->getPageCount());
+    paintOverlayOnPage();
     markPageRendered();
     return;
   }
@@ -292,6 +338,7 @@ void XtcReaderActivity::renderPage() {
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
   LOG_DBG("XTR", "Rendered page %lu/%lu (%u-bit)", currentPage + 1, xtc->getPageCount(), bitDepth);
+  paintOverlayOnPage();
   markPageRendered();
 }
 bool XtcReaderActivity::pageTurn(bool isForward) {
