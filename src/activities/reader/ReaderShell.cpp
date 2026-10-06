@@ -2,6 +2,7 @@
 #include <I18n.h>
 #include <Memory.h>
 
+#include <algorithm>
 #include <iterator>
 
 #include "CrossPointSettings.h"
@@ -9,8 +10,31 @@
 #include "KOReaderCredentialStore.h"
 #include "ReaderActivity.h"
 #include "ReaderUtils.h"
+#include "activities/settings/StatusBarSettingsActivity.h"
 #include "components/UITheme.h"
 #include "util/ScreenshotUtil.h"
+
+void ReaderActivity::drawStatusBar(const StatusBarContent& content) const {
+  GUI.drawStatusBar(renderer, content.bookProgress, content.page, content.pageCount, content.title,
+                    content.paddingBottom, content.textYOffset, content.fillMargin, content.bookmarked,
+                    content.pageCountEstimated);
+}
+
+std::string ReaderActivity::statusBarTitle(const char* bookTitle, const char* chapterTitle) const {
+  if (autoTurnActive) {
+    char text[48];
+    snprintf(text, sizeof(text), "%s%lu", tr(STR_AUTO_TURN_ENABLED), 60UL * 1000UL / autoTurnIntervalMs);
+    return text;
+  }
+  switch (SETTINGS.statusBarSpec().titleMode) {
+    case CrossPointSettings::STATUS_BAR_TITLE::CHAPTER_TITLE:
+      return chapterTitle;  // a page outside any chapter leaves the slot empty
+    case CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE:
+      return bookTitle;
+    default:
+      return {};
+  }
+}
 
 void ReaderActivity::openGoToPercent(const int initialPercent) {
   auto dialog = makeUniqueNoThrow<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent);
@@ -105,24 +129,66 @@ void ReaderActivity::openMenu() {
   openReaderMenu();
 }
 
-void ReaderActivity::drawStatusBar(const StatusBarContent& content) const {
-  GUI.drawStatusBar(renderer, content.bookProgress, content.page, content.pageCount, content.title,
-                    content.paddingBottom, content.textYOffset, content.fillMargin, content.bookmarked,
-                    content.pageCountEstimated);
+void ReaderActivity::openReaderMenu() {
+  pendingManualTurn = 0;
+  if (usesToolbarMenu()) {
+    // Reached from a child screen's result handler (go-to-percent, status bar settings... cancelled
+    // back to the menu), so the framebuffer holds that screen, not the page: re-render the page
+    // and let the reader put the toolbar on top. The in-reader fast path is openOverlay().
+    overlay = Overlay::Toolbar;
+    focusedTool = 0;
+    panelHoldJumped = false;
+    panelCursorShown = !mappedInput.hasTouch();
+    if (!toolbarUi) toolbarUi = std::make_unique<ReaderToolbarUi>(renderer);
+    toolbarUi->begin();
+    discardOverlayPage();
+    requestUpdate();
+    return;
+  }
+  const MenuState state = menuState();
+  auto menu = makeUniqueNoThrow<ReaderMenuActivity>(renderer, mappedInput, state.title, state.page, state.pageCount,
+                                                    state.percent, SETTINGS.orientation, menuCapabilities());
+  if (!menu) {
+    LOG_ERR("READER", "OOM: reader menu");
+    return;
+  }
+  startActivityForResult(std::move(menu), [this](const ActivityResult& result) {
+    const auto& menuResult = std::get<MenuResult>(result.data);
+    if (menuCapabilities().rotate && SETTINGS.orientation != menuResult.orientation) {
+      rotateTo(menuResult.orientation);
+    }
+    setAutoPageTurn(menuResult.pageTurnOption);
+    if (!result.isCancelled) runMenuAction(static_cast<ReaderMenuActivity::MenuAction>(menuResult.action));
+  });
 }
 
-std::string ReaderActivity::statusBarTitle(const char* bookTitle, const char* chapterTitle) const {
-  if (autoTurnActive) {
-    char text[48];
-    snprintf(text, sizeof(text), "%s%lu", tr(STR_AUTO_TURN_ENABLED), 60UL * 1000UL / autoTurnIntervalMs);
-    return text;
-  }
-  switch (SETTINGS.statusBarSpec().titleMode) {
-    case CrossPointSettings::STATUS_BAR_TITLE::CHAPTER_TITLE:
-      return chapterTitle;
-    case CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE:
-      return bookTitle;
+// A menu row chosen from the list menu or the toolbar's More panel.
+void ReaderActivity::runMenuAction(const ReaderMenuActivity::MenuAction action) {
+  using Action = ReaderMenuActivity::MenuAction;
+  switch (action) {
+    case Action::SELECT_CHAPTER:
+      openChapterList();
+      break;
+    case Action::GO_TO_PERCENT:
+      openGoToPercent(currentPercent());
+      break;
+    case Action::GO_HOME:
+      onGoHome();
+      break;
+    case Action::SCREENSHOT:
+      requestScreenshot();
+      break;
+    case Action::READER_SETTINGS:
+      if (auto settings = makeUniqueNoThrow<StatusBarSettingsActivity>(renderer, mappedInput)) {
+        startActivityForResult(std::move(settings), [this](const ActivityResult&) { openReaderMenu(); });
+      }
+      break;
+    case Action::NIGHT_MODE:
+    case Action::FRONTLIGHT:
+      // Toggled in place by the menu that offers them.
+      break;
     default:
-      return {};
+      onReaderMenuAction(action);
+      break;
   }
 }

@@ -29,7 +29,8 @@ class ReaderMenuActivity final : public UiListActivity {
     GO_HOME,
     SYNC,
     DELETE_CACHE,
-    DICTIONARY
+    DICTIONARY,
+    READER_SETTINGS
   };
 
   struct MenuItem {
@@ -52,6 +53,7 @@ class ReaderMenuActivity final : public UiListActivity {
     bool sync = false;
     bool deleteCache = false;
     bool textSettings = false;
+    bool readerSettings = false;  // the status bar settings
   };
 
   static void toggleBluetooth();

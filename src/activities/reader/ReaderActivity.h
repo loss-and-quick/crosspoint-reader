@@ -51,7 +51,6 @@ class ReaderActivity : public Activity {
   int getProgressPercent() const { return getScreenshotInfo().progressPercent; }
   virtual int getProgressBasisPoints() const { return getProgressPercent() * 100; }
 
-  virtual bool handleFormatInput() { return false; }
   virtual bool pageTurn(bool isForward) = 0;
   virtual bool skipPages(int amount) { return pageTurn(amount > 0); }
   // A Bluetooth remote asks for the reader menu (true) or a new clipping (false).
@@ -63,8 +62,10 @@ class ReaderActivity : public Activity {
   virtual void applyInitialOrientation();
   virtual void onEndOfBookRendered() {}
 
-  // ---- Status bar. A reader supplies the numbers, the shell draws the bar with the shared
-  // status-bar settings and decides what the title lane shows.
+  // ---- Reader shell: behaviour every reader shares, whatever produces its pages.
+  // A reader supplies its pages and positions through the virtual hooks above and below;
+  // the shell owns the status bar, the reader menu, go-to-percent, the screenshot request,
+  // automatic page turning and the Home-key menu action.
   struct StatusBarContent {
     float bookProgress = 0;
     int page = 0;  // 1-based page in the chapter
@@ -76,23 +77,33 @@ class ReaderActivity : public Activity {
     bool bookmarked = false;
     bool pageCountEstimated = false;
   };
+  // Draws the shared status bar with the shared status-bar settings.
   void drawStatusBar(const StatusBarContent& content) const;
-  // The title lane text for the configured title mode (book, chapter or none), or the auto-turn
-  // notice while automatic page turning runs.
+  // The title lane text for the configured title mode (book, chapter or none).
   std::string statusBarTitle(const char* bookTitle, const char* chapterTitle) const;
 
-  // ---- Reader shell: behaviour every reader shares, whatever produces its pages.
-  // A reader supplies its pages and positions through the virtual hooks above and below; the
-  // shell owns go-to-percent, the screenshot request, automatic page turning and the input loop.
-
+  // Whole-book position as a percentage; the default reads the progress of the screenshot info.
+  virtual int currentPercent() const { return getProgressPercent(); }
   // Moves to `percent` of the book. Called with the render lock not held.
   virtual void jumpToPercent(int percent) {}
-  // Opens the reader's menu; go-to-percent returns to it when cancelled.
-  virtual void openReaderMenu() {}
   void openGoToPercent(int initialPercent);
 
-  // Rows the reader's menu offers.
+  // Reader menu. The default is the shared menu of fixed-layout readers; a reader with its
+  // own menu chrome overrides openReaderMenu().
+  struct MenuState {
+    std::string title;
+    int page = 0;  // 1-based page in the chapter, 0 when unknown
+    int pageCount = 0;
+    int percent = 0;
+  };
+  virtual void openReaderMenu();
+  virtual MenuState menuState() const { return {getBookTitle(), 0, 0, currentPercent()}; }
+  // Rows the menu offers; the shell adds the ones every reader has.
   virtual ReaderMenuActivity::Capabilities menuCapabilities() const { return {}; }
+  virtual void openChapterList() {}
+  // Menu rows after the shared ones are handled; the reader reacts to anything else here.
+  virtual void onReaderMenuAction(ReaderMenuActivity::MenuAction action) {}
+  void runMenuAction(ReaderMenuActivity::MenuAction action);
 
   bool pendingScreenshot = false;
   void requestScreenshot();
@@ -108,8 +119,8 @@ class ReaderActivity : public Activity {
   // Turns the page when the interval has elapsed; true when this call consumed the loop pass.
   bool tickAutoPageTurn();
 
-  // ---- Input loop. readerLoop() is the input loop of a reader that runs on the shell; what
-  // differs between readers is expressed through the hooks below.
+  // ---- Input loop. loop() is the one input loop of every reader; what differs between readers
+  // is expressed through the hooks below.
   //
   // Per-pass work of the reader before any input is looked at (background builds, popups,
   // layout drift). Return false to end the pass.
@@ -125,7 +136,7 @@ class ReaderActivity : public Activity {
   virtual bool handleBackOverride() { return false; }
   virtual bool handleExtraKeys(bool endOfBookMenuOpen) { return false; }
 
-  // What the reader does with the Confirm long press, the Home key and a rotation request.
+  // What the reader can do with the Confirm long press and the Home key.
   // `guardRepeat`: ignore the request while the previous confirmation popup is still up.
   virtual void bookmarkAction(bool guardRepeat) {}
   virtual void lookupAction(bool guardRepeat) {}
@@ -141,14 +152,13 @@ class ReaderActivity : public Activity {
   bool pendingManualTurnTouch = false;
 
   void openMenu();
-  void readerLoop();
 
   // ---- Toolbar reader menu (SETTINGS.readerMenuStyle == READER_MENU_TOOLBAR): a toolbar and
   // bottom-sheet panels drawn over the page that is on screen. The shell owns the state and the
   // input; the reader provides the content below.
   enum class Overlay { None, Toolbar, Contents, Text, More };
   Overlay overlay = Overlay::None;
-  bool usesToolbarMenu() const;
+  virtual bool usesToolbarMenu() const;
   void openOverlay(Overlay target);
   void closeOverlayToPage();
   void discardOverlayPage();
@@ -164,8 +174,8 @@ class ReaderActivity : public Activity {
     char pageInfo[32] = {};  // "12/40   51%"
     int progressPermille = 0;
   };
-  static void formatPageInfo(ToolbarInfo& info, int page, int pageCount, int percent);
   virtual void toolbarInfo(ToolbarInfo& info) const {}
+  static void formatPageInfo(ToolbarInfo& info, int page, int pageCount, int percent);
   // Chapter scrub of the toolbar: the unit is chapters, or pages when the book has no chapters.
   virtual int scrubCount() const { return 0; }
   virtual int scrubPosition() const { return 0; }
@@ -214,9 +224,6 @@ class ReaderActivity : public Activity {
   std::string moreRowValue(int row) const;
   void activateMoreRow(int row);
 
-  // A menu row chosen from the list menu or the toolbar's More panel.
-  virtual void runMenuAction(ReaderMenuActivity::MenuAction action) {}
-
   bool handleBackNavigation();
   /** True while the end-of-book suggestion menu is on screen and owning input. */
   bool endOfBookMenuActive() const;
@@ -238,7 +245,7 @@ class ReaderActivity : public Activity {
   void onEnter() override;
   void onExit() override;
   void prepareForSleep() override;
-  void loop() override;
+  void loop() final;
   void render(RenderLock&& lock) override;
 
   bool isReaderActivity() const final { return true; }

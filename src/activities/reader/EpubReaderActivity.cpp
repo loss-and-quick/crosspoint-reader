@@ -34,7 +34,6 @@
 #include "EpubReaderBookmarksActivity.h"
 #include "EpubReaderClippingListActivity.h"
 #include "EpubReaderFootnoteSelectActivity.h"
-#include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderUtils.h"
 #include "EpubTocChapterList.h"
 #include "KOReaderCredentialStore.h"
@@ -60,7 +59,6 @@
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
 #include "util/ButtonNavigator.h"
-#include "util/ScreenshotUtil.h"
 
 namespace {
 // The X4 Pro and X4 Classic carry the X4's panel but sit outside isXteinkDevice()
@@ -338,44 +336,13 @@ ReaderMenuActivity::Capabilities EpubReaderActivity::menuCapabilities() const {
           .textSettings = true};
 }
 
-void EpubReaderActivity::openReaderMenu() {
-  pendingManualTurn = 0;
-  if (usesToolbarMenu()) {
-    // Reached from a child activity's result handler (footnotes, bookmarks,
-    // go-to-percent... cancelled back to the menu), so the framebuffer holds
-    // that screen, not the page: re-render the page and let renderBook() put
-    // the toolbar on top. The in-reader fast path is openOverlay().
-    overlay = Overlay::Toolbar;
-    focusedTool = 0;
-    panelHoldJumped = false;
-    panelCursorShown = !mappedInput.hasTouch();
-    if (!toolbarUi) toolbarUi = std::make_unique<ReaderToolbarUi>(renderer);
-    toolbarUi->begin();
-    discardOverlayPage();
-    requestUpdate();
-    return;
-  }
-  // Child screens (chapter list, text settings) release the section to free its
-  // pagination buffers; chapterPosition() covers that with the cached position.
+int EpubReaderActivity::currentPercent() const { return bookPercentFor(chapterPosition()); }
+
+// Child screens (chapter list, text settings) release the section to free its pagination
+// buffers; chapterPosition() covers that with the cached position.
+ReaderActivity::MenuState EpubReaderActivity::menuState() const {
   const ChapterPosition position = chapterPosition();
-  const int bookProgressPercent = bookPercentFor(position);
-
-  startActivityForResult(std::make_unique<ReaderMenuActivity>(
-                             renderer, mappedInput, epub->getTitle(), position.displayPage(), position.totalPages,
-                             bookProgressPercent, SETTINGS.orientation, menuCapabilities()),
-                         [this](const ActivityResult& result) {
-                           const auto& menu = std::get<MenuResult>(result.data);
-
-                           if (SETTINGS.orientation != menu.orientation) {
-                             applyOrientation(menu.orientation);
-                           }
-
-                           setAutoPageTurn(menu.pageTurnOption);
-
-                           if (!result.isCancelled) {
-                             runMenuAction(static_cast<ReaderMenuActivity::MenuAction>(menu.action));
-                           }
-                         });
+  return {epub->getTitle(), position.displayPage(), position.totalPages, bookPercentFor(position)};
 }
 
 // Runs on the render task, under its lock, right before every chapter build. The page turner's
@@ -611,7 +578,7 @@ void EpubReaderActivity::openFootnoteSelect(const bool reopenMenuOnCancel) {
   startActivityForResult(std::move(selector), [this, reopenMenuOnCancel](const ActivityResult& result) {
     if (result.isCancelled) {
       if (reopenMenuOnCancel) {
-        openReaderMenu();
+        openMenu();
       } else {
         requestUpdate();
       }
@@ -923,11 +890,52 @@ int EpubReaderActivity::currentTocIndex() const {
   return std::max(0, cachedSection.getTocIndexForPage(nextPageNumber));
 }
 
-void EpubReaderActivity::runMenuAction(ReaderMenuActivity::MenuAction action) {
+void EpubReaderActivity::openChapterList() {
+  const int tocIndex = currentTocIndex();
+  // Release the section while the chapter list is up (mirrors the
+  // TEXT_SETTINGS path): picking a chapter resets it anyway, and its
+  // tens-of-KB footprint is the difference between the chapter list
+  // holding its CJK glyph arena (RAM-only repaints) and re-reading
+  // glyphs from SD on every row step. Cancel restores via the same
+  // cached-position rebuild TEXT_SETTINGS uses.
+  {
+    RenderLock lock;
+    if (section) {
+      rememberCurrentContentOffset();
+      cachedSpineIndex = currentSpineIndex;
+      cachedChapterTotalPageCount = section->pageCount;
+      nextPageNumber = section->currentPage;
+    }
+    section.reset();
+  }
+  auto source = makeUniqueNoThrow<EpubTocChapterList>(renderer, epub, tocIndex);
+  auto list = source ? makeUniqueNoThrow<ReaderChapterListActivity>(renderer, mappedInput, std::move(source)) : nullptr;
+  if (!list) {
+    LOG_ERR("ERS", "OOM: chapter list");
+    openMenu();
+    return;
+  }
+  startActivityForResult(std::move(list), [this](const ActivityResult& result) {
+    if (result.isCancelled) {
+      openMenu();
+      return;
+    }
+    const auto& chapterResult = std::get<ChapterResult>(result.data);
+    RenderLock lock;
+    clearDeferredReposition();
+    currentSpineIndex = chapterResult.spineIndex;
+    pendingAnchor = chapterResult.anchor;
+    nextPageNumber = 0;
+    section.reset();
+    requestUpdate();
+  });
+}
+
+void EpubReaderActivity::onReaderMenuAction(const ReaderMenuActivity::MenuAction action) {
   auto progressChangeResultHandler = [this](const ActivityResult& result) {
     loadCachedBookmarks();
     if (result.isCancelled) {
-      openReaderMenu();
+      openMenu();
     } else {
       const auto& sync = std::get<ProgressChangeResult>(result.data);
 
@@ -936,49 +944,6 @@ void EpubReaderActivity::runMenuAction(ReaderMenuActivity::MenuAction action) {
   };
 
   switch (action) {
-    case ReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
-      int tocIndex;
-      // Release the section while the chapter list is up (mirrors the
-      // TEXT_SETTINGS path): picking a chapter resets it anyway, and its
-      // tens-of-KB footprint is the difference between the chapter list
-      // holding its CJK glyph arena (RAM-only repaints) and re-reading
-      // glyphs from SD on every row step. Cancel restores via the same
-      // cached-position rebuild TEXT_SETTINGS uses.
-      {
-        RenderLock lock;
-        tocIndex = currentTocIndex();
-        if (section) {
-          rememberCurrentContentOffset();
-          cachedSpineIndex = currentSpineIndex;
-          cachedChapterTotalPageCount = section->pageCount;
-          nextPageNumber = section->currentPage;
-        }
-        section.reset();
-      }
-      auto source = makeUniqueNoThrow<EpubTocChapterList>(renderer, epub, tocIndex);
-      auto list =
-          source ? makeUniqueNoThrow<ReaderChapterListActivity>(renderer, mappedInput, std::move(source)) : nullptr;
-      if (!list) {
-        LOG_ERR("ERS", "OOM: chapter list");
-        openReaderMenu();
-        break;
-      }
-      startActivityForResult(std::move(list), [this](const ActivityResult& result) {
-        if (result.isCancelled) {
-          openReaderMenu();
-          return;
-        }
-        const auto& chapterResult = std::get<ChapterResult>(result.data);
-        RenderLock lock;
-        clearDeferredReposition();
-        currentSpineIndex = chapterResult.spineIndex;
-        pendingAnchor = chapterResult.anchor;
-        nextPageNumber = 0;
-        section.reset();
-        requestUpdate();
-      });
-      break;
-    }
     case ReaderMenuActivity::MenuAction::FOOTNOTES: {
       openFootnoteSelect(true);
       break;
@@ -997,22 +962,11 @@ void EpubReaderActivity::runMenuAction(ReaderMenuActivity::MenuAction action) {
                                  }
                                  section.reset();
                                }
-                               openReaderMenu();
+                               openMenu();
                              });
       break;
     }
-    case ReaderMenuActivity::MenuAction::BLUETOOTH:
-    case ReaderMenuActivity::MenuAction::NIGHT_MODE:
-      // Handled in-place by ReaderMenuActivity so its On/Off value updates
-      // without closing the menu.
-      break;
-    case ReaderMenuActivity::MenuAction::FRONTLIGHT:
-      // Handled in-place by ReaderMenuActivity using the live frontlight HAL.
-      break;
-    case ReaderMenuActivity::MenuAction::GO_TO_PERCENT: {
-      openGoToPercent(bookPercentFor(chapterPosition()));
-      break;
-    }
+
     case ReaderMenuActivity::MenuAction::DICTIONARY: {
       openDictionaryWordSelect();
       break;
@@ -1022,16 +976,12 @@ void EpubReaderActivity::runMenuAction(ReaderMenuActivity::MenuAction action) {
         std::string fullText = section->getTextFromSectionFile();
         if (!fullText.empty()) {
           startActivityForResult(std::make_unique<QrDisplayActivity>(renderer, mappedInput, fullText),
-                                 [this](const ActivityResult&) { openReaderMenu(); });
+                                 [this](const ActivityResult&) { openMenu(); });
           break;
         }
       }
       requestUpdate();
       break;
-    }
-    case ReaderMenuActivity::MenuAction::GO_HOME: {
-      onGoHome();
-      return;
     }
     case ReaderMenuActivity::MenuAction::DELETE_CACHE: {
       {
@@ -1050,10 +1000,6 @@ void EpubReaderActivity::runMenuAction(ReaderMenuActivity::MenuAction action) {
       }
       onGoHome();
       return;
-    }
-    case ReaderMenuActivity::MenuAction::SCREENSHOT: {
-      requestScreenshot();
-      break;
     }
     case ReaderMenuActivity::MenuAction::SYNC: {
       syncAction();
@@ -1077,6 +1023,8 @@ void EpubReaderActivity::runMenuAction(ReaderMenuActivity::MenuAction action) {
       addBookmark();
       break;
     }
+    default:
+      break;
   }
 }
 
@@ -1323,10 +1271,8 @@ bool EpubReaderActivity::remoteShortcut(const bool readerMenu) {
   autoTurnActive = false;
   if (!readerMenu) {
     startClipSelection();
-  } else if (usesToolbarMenu()) {
-    openOverlay(Overlay::Toolbar);
   } else {
-    openReaderMenu();
+    openMenu();
   }
   return true;
 }
@@ -1696,10 +1642,7 @@ void EpubReaderActivity::renderBook() {
 
   showPendingSyncSaveError();
 
-  if (pendingScreenshot) {
-    pendingScreenshot = false;
-    ScreenshotUtil::takeScreenshot(renderer);
-  }
+  takePendingScreenshot();
 
   if (showBookmarkMessage) {
     GUI.drawPopup(renderer, bookmarkRemoved ? tr(STR_BOOKMARK_REMOVED) : tr(STR_BOOKMARK_ADDED));

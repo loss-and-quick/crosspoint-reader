@@ -217,31 +217,6 @@ bool ReaderActivity::handleEndOfBookPageTurn(const bool prevTriggered, const boo
 
 void ReaderActivity::loop() {
   rememberBookOnceRendered();
-  clearEndOfBookOptionsIfNeeded();
-  if (handleEndOfBookMenu()) return;
-  if (handleFormatInput()) return;
-  if (handleBackNavigation()) return;
-
-  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
-  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
-  prevTriggered = prevTriggered || touch.prev;
-  nextTriggered = nextTriggered || touch.next;
-  if (!prevTriggered && !nextTriggered) return;
-  if (handleEndOfBookPageTurn(prevTriggered, nextTriggered)) return;
-
-  const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
-  const bool skip =
-      !fromTilt && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP && heldMs >= ReaderUtils::SKIP_HOLD_MS;
-
-  const bool changed = skip ? skipPages(prevTriggered ? -10 : 10) : pageTurn(!prevTriggered);
-  // A skip is navigation, not reading: it never counts toward session dwell.
-  notePageTurn(!skip && !prevTriggered, changed);
-  if (changed && (touch.prev || touch.next)) haptic_feedback::touchAction(skip);
-  requestUpdate();
-}
-
-void ReaderActivity::readerLoop() {
-  rememberBookOnceRendered();
   if (!onLoopTick()) return;
   clearEndOfBookOptionsIfNeeded();
 

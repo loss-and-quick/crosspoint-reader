@@ -35,7 +35,6 @@ class EpubReaderActivity final : public ReaderActivity {
   std::optional<uint32_t> pendingOffsetJump;
   bool pendingPercentJump = false;
   float pendingSpineProgress = 0.0f;
-  bool pendingScreenshot = false;
   bool pendingSyncSaveError = false;
   uint8_t pageLoadRetryCount = 0;
   static constexpr uint8_t MAX_PAGE_LOAD_RETRIES = 3;
@@ -120,8 +119,10 @@ class EpubReaderActivity final : public ReaderActivity {
   void rememberCurrentContentOffset();
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
   void jumpToPercent(int percent) override;
-  void runMenuAction(ReaderMenuActivity::MenuAction action) override;
-  void openReaderMenu() override;
+  void onReaderMenuAction(ReaderMenuActivity::MenuAction action) override;
+  void openChapterList() override;
+  int currentPercent() const override;
+  MenuState menuState() const override;
   int currentTocIndex() const;
   // Live section position, or the values cached before a child screen
   // released the section.
@@ -214,7 +215,6 @@ class EpubReaderActivity final : public ReaderActivity {
       : ReaderActivity("EpubReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
   ~EpubReaderActivity() override;
 
-  void loop() override { readerLoop(); }
   void render(RenderLock&& lock) override;
 
   bool pageTurn(bool isForward) override;

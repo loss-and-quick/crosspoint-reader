@@ -61,6 +61,7 @@ void ReaderMenuActivity::buildMenuItems(std::vector<MenuItem>& items, const Capa
       {MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT, nullptr},
       {MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON, nullptr},
       {MenuAction::DISPLAY_QR, StrId::STR_DISPLAY_QR, &Capabilities::qr},
+      {MenuAction::READER_SETTINGS, StrId::STR_CUSTOMISE_STATUS_BAR, &Capabilities::readerSettings},
       {MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON, nullptr},
       {MenuAction::SYNC, StrId::STR_SYNC_PROGRESS, &Capabilities::sync},
       {MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE, &Capabilities::deleteCache},
