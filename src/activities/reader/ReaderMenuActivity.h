@@ -1,5 +1,4 @@
 #pragma once
-#include <Epub.h>
 #include <I18n.h>
 
 #include <string>
@@ -8,7 +7,7 @@
 #include "activities/UiListActivity.h"
 #include "components/OptionPopup.h"
 
-class EpubReaderMenuActivity final : public UiListActivity {
+class ReaderMenuActivity final : public UiListActivity {
  public:
   // Menu actions available from the reader menu.
   enum class MenuAction {
@@ -38,13 +37,29 @@ class EpubReaderMenuActivity final : public UiListActivity {
     StrId labelId;
   };
 
-  static void toggleBluetooth();
-  static void buildMenuItems(std::vector<MenuItem>& items, bool hasFootnotes, bool hasBookmarks, bool hasClippings);
+  // Which rows the reader offers. The reader fills this in from what its pages support; the
+  // menu has no knowledge of the reader type.
+  struct Capabilities {
+    bool chapters = false;
+    bool footnotes = false;
+    bool bookmarks = false;  // the list of saved bookmarks
+    bool toggleBookmark = false;
+    bool saveClipping = false;
+    bool viewClippings = false;
+    bool lookup = false;
+    bool rotate = false;
+    bool qr = false;
+    bool sync = false;
+    bool deleteCache = false;
+    bool textSettings = false;
+  };
 
-  explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
-                                  const int currentPage, const int totalPages, const int bookProgressPercent,
-                                  const uint8_t currentOrientation, const bool hasFootnotes, bool hasBookmarks,
-                                  bool hasClippings);
+  static void toggleBluetooth();
+  static void buildMenuItems(std::vector<MenuItem>& items, const Capabilities& caps);
+
+  explicit ReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
+                              int currentPage, int totalPages, int bookProgressPercent, uint8_t currentOrientation,
+                              const Capabilities& caps);
 
   void render(RenderLock&&) override;
   bool handleHomeGesture() override;

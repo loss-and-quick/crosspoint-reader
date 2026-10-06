@@ -13,10 +13,10 @@
 #include "BookmarkEntry.h"
 #include "ChapterPosition.h"
 #include "ClipSelectionActivity.h"
-#include "EpubReaderMenuActivity.h"
 #include "LinkNoteTitle.h"
 #include "ProgressMapper.h"
 #include "ReaderActivity.h"
+#include "ReaderMenuActivity.h"
 #include "ReaderToolbarUi.h"
 #include "components/OptionPopup.h"
 
@@ -101,7 +101,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void pushOverlayRefresh();
   void settleOverlayRefresh();
   int autoTurnOption = 0;  // current auto page-turn rate index (More panel)
-  std::vector<EpubReaderMenuActivity::MenuItem> moreItems;
+  std::vector<ReaderMenuActivity::MenuItem> moreItems;
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
@@ -165,13 +165,15 @@ class EpubReaderActivity final : public ReaderActivity {
   void rememberCurrentContentOffset();
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
   void jumpToPercent(int percent);
-  void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
+  void onReaderMenuConfirm(ReaderMenuActivity::MenuAction action);
   int currentTocIndex() const;
+  ReaderMenuActivity::Capabilities menuCapabilities() const;
   // Live section position, or the values cached before a child screen
   // released the section.
   ChapterPosition chapterPosition() const;
   int bookPercentFor(const ChapterPosition& position) const;
   void openReaderMenu();
+  ReaderMenuActivity::Capabilities menuCapabilities() const;
   // Toolbar reader menu (see Overlay above).
   bool usesToolbarMenu() const;
   void openOverlay(Overlay target);
