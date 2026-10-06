@@ -11,8 +11,9 @@
 #include "CrossPointSettings.h"
 #include "ProgressFile.h"
 #include "ReaderActivity.h"
+#include "ReaderChapterListActivity.h"
 #include "ReaderUtils.h"
-#include "XtcReaderChapterSelectionActivity.h"
+#include "XtcChapterLists.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -34,13 +35,19 @@ bool XtcReaderActivity::loadBook() {
 
 void XtcReaderActivity::openChapterSelection() {
   if (xtc && xtc->hasChapters() && !xtc->getChapters().empty()) {
-    startActivityForResult(std::make_unique<XtcReaderChapterSelectionActivity>(renderer, mappedInput, xtc, currentPage),
-                           [this](const ActivityResult& result) {
-                             if (!result.isCancelled) {
-                               currentPage = std::get<PageResult>(result.data).page;
-                               requestUpdate();
-                             }
-                           });
+    auto source = makeUniqueNoThrow<XtcChapterList>(xtc, currentPage);
+    auto list =
+        source ? makeUniqueNoThrow<ReaderChapterListActivity>(renderer, mappedInput, std::move(source)) : nullptr;
+    if (!list) {
+      LOG_ERR("XTR", "OOM: chapter list");
+      return;
+    }
+    startActivityForResult(std::move(list), [this](const ActivityResult& result) {
+      if (!result.isCancelled) {
+        currentPage = std::get<PageResult>(result.data).page;
+        requestUpdate();
+      }
+    });
   }
 }
 

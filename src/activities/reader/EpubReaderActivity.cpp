@@ -32,17 +32,18 @@
 #include "CrossPointState.h"
 #include "DictionaryWordSelectActivity.h"
 #include "EpubReaderBookmarksActivity.h"
-#include "EpubReaderChapterSelectionActivity.h"
 #include "EpubReaderClippingListActivity.h"
 #include "EpubReaderFootnoteSelectActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderUtils.h"
+#include "EpubTocChapterList.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #include "MappedInputManager.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
 #include "ReaderActivity.h"
+#include "ReaderChapterListActivity.h"
 #include "ReaderFontSizes.h"
 #include "ReaderLineSpacing.h"
 #include "ReaderToolbarUi.h"
@@ -954,22 +955,28 @@ void EpubReaderActivity::runMenuAction(ReaderMenuActivity::MenuAction action) {
         }
         section.reset();
       }
-      startActivityForResult(
-          std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, tocIndex),
-          [this](const ActivityResult& result) {
-            if (result.isCancelled) {
-              openReaderMenu();
-              return;
-            }
-            const auto& chapterResult = std::get<ChapterResult>(result.data);
-            RenderLock lock;
-            clearDeferredReposition();
-            currentSpineIndex = chapterResult.spineIndex;
-            pendingAnchor = chapterResult.anchor;
-            nextPageNumber = 0;
-            section.reset();
-            requestUpdate();
-          });
+      auto source = makeUniqueNoThrow<EpubTocChapterList>(renderer, epub, tocIndex);
+      auto list =
+          source ? makeUniqueNoThrow<ReaderChapterListActivity>(renderer, mappedInput, std::move(source)) : nullptr;
+      if (!list) {
+        LOG_ERR("ERS", "OOM: chapter list");
+        openReaderMenu();
+        break;
+      }
+      startActivityForResult(std::move(list), [this](const ActivityResult& result) {
+        if (result.isCancelled) {
+          openReaderMenu();
+          return;
+        }
+        const auto& chapterResult = std::get<ChapterResult>(result.data);
+        RenderLock lock;
+        clearDeferredReposition();
+        currentSpineIndex = chapterResult.spineIndex;
+        pendingAnchor = chapterResult.anchor;
+        nextPageNumber = 0;
+        section.reset();
+        requestUpdate();
+      });
       break;
     }
     case ReaderMenuActivity::MenuAction::FOOTNOTES: {
