@@ -184,6 +184,7 @@ void ReaderActivity::runMenuAction(const ReaderMenuActivity::MenuAction action) 
       }
       break;
     case Action::NIGHT_MODE:
+    case Action::COMICS_NIGHT_MODE:
     case Action::FRONTLIGHT:
       // Toggled in place by the menu that offers them.
       break;

@@ -33,7 +33,9 @@ bool XtcReaderActivity::loadBook() {
 }
 
 ReaderMenuActivity::Capabilities XtcReaderActivity::menuCapabilities() const {
-  return {.chapters = xtc && xtc->hasChapters() && !xtc->getChapters().empty(), .readerSettings = true};
+  return {.chapters = xtc && xtc->hasChapters() && !xtc->getChapters().empty(),
+          .comicsNightMode = true,
+          .readerSettings = true};
 }
 
 void XtcReaderActivity::openChapterList() {
@@ -55,6 +57,12 @@ void XtcReaderActivity::openChapterList() {
 }
 
 void XtcReaderActivity::applyInitialOrientation() { renderer.setOrientation(GfxRenderer::Orientation::Portrait); }
+
+bool XtcReaderActivity::wantsInvertedDisplay(const bool nightMode) const {
+  return xtc::reading::planPolarity(nightMode, SETTINGS.comicsNightMode == CrossPointSettings::COMICS_INVERT,
+                                    xtc ? xtc->getBitDepth() : 1, pageShown())
+      .displayInverted;
+}
 
 void XtcReaderActivity::renderBook() {
   if (!xtc) {
@@ -184,6 +192,23 @@ void XtcReaderActivity::paintStatusBar(const xtc::reading::Placement& placement)
   drawStatusBar(content);
 }
 
+// Night look of everything that is not the page when the panel stays in normal polarity (2-bit pages).
+void XtcReaderActivity::paintNightChrome(const xtc::reading::Placement& placement, const int pageWidth,
+                                         const int pageHeight) const {
+  const int width = renderer.getScreenWidth();
+  const int height = renderer.getScreenHeight();
+  const int pageBottom = std::min(placement.pageY + pageHeight, height);
+  const int pageRight = std::min(pageWidth, width);
+  renderer.invertRegion(0, 0, width, placement.pageY);
+  renderer.invertRegion(0, pageBottom, width, height - pageBottom);
+  renderer.invertRegion(pageRight, placement.pageY, width - pageRight, pageBottom - placement.pageY);
+  if (placement.overlay) {
+    const int y0 = std::max(placement.stripY, placement.pageY);
+    const int y1 = std::min(placement.stripY + placement.stripH, pageBottom);
+    renderer.invertRegion(0, y0, pageRight, y1 - y0);
+  }
+}
+
 // A page that cannot be shown still gets the reader's chrome: the status bar and the toolbar menu, so the
 // reader can be left or moved on from the error.
 void XtcReaderActivity::renderErrorScreen(const StrId message) {
@@ -222,6 +247,8 @@ void XtcReaderActivity::renderPage() {
     return;
   }
 
+  const auto polarity = xtc::reading::planPolarity(
+      SETTINGS.screenInverted != 0, SETTINGS.comicsNightMode == CrossPointSettings::COMICS_INVERT, bitDepth, true);
   const auto placement = pagePlacement(pageHeight);
   const int pageY = placement.pageY;
   // A strip drawn over the page keeps the page's pixels out from under it, in every pass.
@@ -237,6 +264,7 @@ void XtcReaderActivity::renderPage() {
     const uint8_t* plane2 = pageBuffer + planeSize;
     const size_t colBytes = (pageHeight + 7) / 8;
 
+    // Level as drawn: the page's own, or its mirror for inverted comics in night mode.
     auto getPixelValue = [&](uint16_t x, uint16_t y) -> uint8_t {
       const size_t colIndex = pageWidth - 1 - x;
       const size_t byteInCol = y / 8;
@@ -244,7 +272,8 @@ void XtcReaderActivity::renderPage() {
       const size_t byteOffset = colIndex * colBytes + byteInCol;
       const uint8_t bit1 = (plane1[byteOffset] >> bitInByte) & 1;
       const uint8_t bit2 = (plane2[byteOffset] >> bitInByte) & 1;
-      return (bit1 << 1) | bit2;
+      const uint8_t level = (bit1 << 1) | bit2;
+      return polarity.mirrorLevels ? xtc::reading::mirrorLevel(level) : level;
     };
 
     const auto paintBwPage = [&] {
@@ -257,6 +286,7 @@ void XtcReaderActivity::renderPage() {
         }
       }
       paintStatusBar(placement);
+      if (polarity.invertChrome) paintNightChrome(placement, pageWidth, pageHeight);
     };
     paintBwPage();
 
@@ -333,6 +363,8 @@ void XtcReaderActivity::renderPage() {
 
   free(pageBuffer);
 
+  // Night mode inverts the whole frame at output; flip the page back to keep its original look.
+  if (polarity.counterInvertPage) renderer.preserveImagePolarity(0, pageY, pageWidth, pageHeight);
   paintStatusBar(placement);
 
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);

@@ -53,6 +53,7 @@ void ReaderMenuActivity::buildMenuItems(std::vector<MenuItem>& items, const Capa
       {MenuAction::SAVE_CLIPPING, StrId::STR_SAVE_CLIPPING, &Capabilities::saveClipping},
       {MenuAction::VIEW_CLIPPINGS, StrId::STR_VIEW_CLIPPINGS, &Capabilities::viewClippings},
       {MenuAction::NIGHT_MODE, StrId::STR_NIGHT_MODE, nullptr},
+      {MenuAction::COMICS_NIGHT_MODE, StrId::STR_COMICS_NIGHT_MODE, &Capabilities::comicsNightMode},
       {MenuAction::FRONTLIGHT, StrId::STR_FRONTLIGHT, nullptr},
       {MenuAction::BLUETOOTH, StrId::STR_BT_PAGE_TURNER, nullptr},
       {MenuAction::DICTIONARY, StrId::STR_LOOKUP, &Capabilities::lookup},
@@ -154,6 +155,15 @@ void ReaderMenuActivity::activateIndex(const int index) {
     return;
   }
 
+  if (selectedAction == MenuAction::COMICS_NIGHT_MODE) {
+    SETTINGS.comicsNightMode = SETTINGS.comicsNightMode == CrossPointSettings::COMICS_INVERT
+                                   ? CrossPointSettings::COMICS_KEEP_ORIGINAL
+                                   : CrossPointSettings::COMICS_INVERT;
+    SETTINGS.saveToFile();
+    requestUpdate();
+    return;
+  }
+
   if (selectedAction == MenuAction::FRONTLIGHT) {
     const bool lightOn = !Frontlight.isOn();
     Frontlight.setOn(lightOn);
@@ -218,6 +228,9 @@ void ReaderMenuActivity::buildScreen(UiScreen& screen) {
       GUI.setCheckboxRow(menuRowItems[i], SETTINGS.screenInverted);
     } else if (action == MenuAction::BLUETOOTH) {
       GUI.setCheckboxRow(menuRowItems[i], SETTINGS.ble.enabled);
+    } else if (action == MenuAction::COMICS_NIGHT_MODE) {
+      menuRowItems[i].value = I18N.get(
+          SETTINGS.comicsNightMode == CrossPointSettings::COMICS_INVERT ? StrId::STR_INVERT : StrId::STR_KEEP_ORIGINAL);
     } else if (action == MenuAction::FRONTLIGHT) {
       GUI.setCheckboxRow(menuRowItems[i], Frontlight.isOn());
     }

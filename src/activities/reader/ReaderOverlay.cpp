@@ -494,6 +494,9 @@ std::string ReaderActivity::moreRowValue(int row) const {
   switch (moreItems[row].action) {
     case MA::ROTATE_SCREEN:
       return I18N.get(kOrient[SETTINGS.orientation % CrossPointSettings::ORIENTATION_COUNT]);
+    case MA::COMICS_NIGHT_MODE:
+      return I18N.get(SETTINGS.comicsNightMode == CrossPointSettings::COMICS_INVERT ? StrId::STR_INVERT
+                                                                                    : StrId::STR_KEEP_ORIGINAL);
     case MA::AUTO_PAGE_TURN:
       return (autoTurnOption == 0 || autoTurnOption >= static_cast<int>(std::size(ReaderUtils::PAGE_TURN_RATES)))
                  ? std::string(tr(STR_STATE_OFF))
@@ -549,6 +552,14 @@ void ReaderActivity::activateMoreRow(int row) {
       return;
     case MA::NIGHT_MODE:
       SETTINGS.screenInverted = SETTINGS.screenInverted == 0 ? 1 : 0;
+      SETTINGS.saveToFile();
+      discardOverlayPage();
+      requestUpdate();
+      return;
+    case MA::COMICS_NIGHT_MODE:
+      SETTINGS.comicsNightMode = SETTINGS.comicsNightMode == CrossPointSettings::COMICS_INVERT
+                                     ? CrossPointSettings::COMICS_KEEP_ORIGINAL
+                                     : CrossPointSettings::COMICS_INVERT;
       SETTINGS.saveToFile();
       discardOverlayPage();
       requestUpdate();

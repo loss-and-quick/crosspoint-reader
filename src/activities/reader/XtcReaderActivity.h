@@ -25,8 +25,10 @@ class XtcReaderActivity final : public ReaderActivity {
   void renderErrorScreen(StrId message);
   xtc::reading::Placement pagePlacement(int pageHeight) const;
   void paintStatusBar(const xtc::reading::Placement& placement) const;
+  void paintNightChrome(const xtc::reading::Placement& placement, int pageWidth, int pageHeight) const;
   ChapterPage chapterPage() const;
   void saveProgress() const;
+  bool pageShown() const { return xtc && currentPage < xtc->getPageCount(); }
   void loadProgress();
 
   bool loadBook() override;
@@ -64,6 +66,7 @@ class XtcReaderActivity final : public ReaderActivity {
   bool skipPages(int amount) override;
   bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;
+  bool wantsInvertedDisplay(bool nightMode) const override;
 
   ScreenshotInfo getScreenshotInfo() const override;
 };
