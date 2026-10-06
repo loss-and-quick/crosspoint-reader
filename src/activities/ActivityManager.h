@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "ActivityBusy.h"
 #include "GfxRenderer.h"
 #include "MappedInputManager.h"
 #include "settings/SettingsSection.h"
@@ -73,6 +74,9 @@ class ActivityManager {
   // The screen visit whose frame the render task painted last.
   std::atomic<uint32_t> paintedVisit{0};
 
+  // Work in flight outside any one activity (a detached task); keeps the idle clock from running.
+  BusyCounter busyCounter;
+
  public:
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput);
   ~ActivityManager();
@@ -107,7 +111,10 @@ class ActivityManager {
   // Note: if popActivity() on last activity on the stack, we will goHome()
   void popActivity();
 
+  // True while work holds a BusyGuard or the current activity reports work in flight.
   bool preventAutoSleep() const;
+  // Work that runs beside or outlives the current activity holds this for its whole duration.
+  BusyGuard holdBusy() { return BusyGuard(busyCounter); }
   bool requiresExclusiveStorageLoop() const;
   bool isReaderActivity() const;
   // Bluetooth page turner (lib/BlePageTurner): the book in front, whether it has painted a page, and
