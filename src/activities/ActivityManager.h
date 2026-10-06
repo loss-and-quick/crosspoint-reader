@@ -76,6 +76,8 @@ class ActivityManager {
 
   // Work in flight outside any one activity (a detached task); keeps the idle clock from running.
   BusyCounter busyCounter;
+  // Renders count only toward workInFlight(): a periodic repaint must not hold the device awake.
+  BusyCounter renderCounter;
 
  public:
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput);
@@ -115,6 +117,8 @@ class ActivityManager {
   bool preventAutoSleep() const;
   // Work that runs beside or outlives the current activity holds this for its whole duration.
   BusyGuard holdBusy() { return BusyGuard(busyCounter); }
+  // preventAutoSleep() plus a render in progress: what an idle-timeout decision must not interrupt.
+  bool workInFlight() const;
   bool requiresExclusiveStorageLoop() const;
   bool isReaderActivity() const;
   // Bluetooth page turner (lib/BlePageTurner): the book in front, whether it has painted a page, and

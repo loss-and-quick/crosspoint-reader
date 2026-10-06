@@ -995,7 +995,10 @@ void loop() {
   }
 
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
-  if (sleepTimeoutMs > 0 && millis() - lastActivityTime >= sleepTimeoutMs) {
+  // Work in flight (a task, a render, an exclusive storage owner) defers sleeping; the next pass decides again.
+  if (sleepTimeoutMs > 0 && millis() - lastActivityTime >= sleepTimeoutMs &&
+      idlepolicy::decideTimeout(activityManager.workInFlight(), activityManager.requiresExclusiveStorageLoop()) ==
+          idlepolicy::TimeoutAction::Sleep) {
     LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);
     enterDeepSleep(true);
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
@@ -1066,6 +1069,8 @@ void loop() {
   const unsigned long activityStartTime = millis();
   activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;
+  // A blocking loop() was work, not idle time: the result gets a full timeout on screen.
+  if (idlepolicy::blockedLoopCountsAsActivity(activityDuration)) lastActivityTime = millis();
 
   const unsigned long loopDuration = millis() - loopStartTime;
   if (loopDuration > maxLoopDuration) {

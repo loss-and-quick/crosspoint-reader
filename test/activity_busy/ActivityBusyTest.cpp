@@ -77,3 +77,23 @@ TEST(BusyGuard, SelfMoveKeepsTheHold) {
   EXPECT_TRUE(guard.holding());
   EXPECT_EQ(counter.holders(), 1u);
 }
+
+TEST(IdlePolicy, BlockingLoopRestartsTheIdleClock) {
+  EXPECT_FALSE(idlepolicy::blockedLoopCountsAsActivity(0));
+  EXPECT_FALSE(idlepolicy::blockedLoopCountsAsActivity(idlepolicy::kBlockingLoopMs - 1));
+  EXPECT_TRUE(idlepolicy::blockedLoopCountsAsActivity(idlepolicy::kBlockingLoopMs));
+  EXPECT_TRUE(idlepolicy::blockedLoopCountsAsActivity(10UL * 60UL * 1000UL));
+}
+
+TEST(IdlePolicy, IdleTimeoutSleeps) {
+  EXPECT_EQ(idlepolicy::decideTimeout(false, false), idlepolicy::TimeoutAction::Sleep);
+}
+
+TEST(IdlePolicy, WorkInFlightDefersSleep) {
+  EXPECT_EQ(idlepolicy::decideTimeout(true, false), idlepolicy::TimeoutAction::Defer);
+}
+
+TEST(IdlePolicy, ExclusiveStorageDefersSleep) {
+  EXPECT_EQ(idlepolicy::decideTimeout(false, true), idlepolicy::TimeoutAction::Defer);
+  EXPECT_EQ(idlepolicy::decideTimeout(true, true), idlepolicy::TimeoutAction::Defer);
+}

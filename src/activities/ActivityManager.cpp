@@ -82,6 +82,7 @@ void ActivityManager::renderTaskLoop() {
     // where the main task deletes the activity between the null-check and render().
     RenderLock lock;
     if (currentActivity) {
+      const BusyGuard busy(renderCounter);
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
       // Night mode is a global output polarity applied to every activity.
       // The sleep screen forces normal polarity itself (SleepActivity).
@@ -401,6 +402,8 @@ void ActivityManager::popActivity() {
 bool ActivityManager::preventAutoSleep() const {
   return busyCounter.busy() || (currentActivity && currentActivity->preventAutoSleep());
 }
+
+bool ActivityManager::workInFlight() const { return preventAutoSleep() || renderCounter.busy(); }
 
 bool ActivityManager::requiresExclusiveStorageLoop() const {
   return currentActivity && currentActivity->requiresExclusiveStorageLoop();

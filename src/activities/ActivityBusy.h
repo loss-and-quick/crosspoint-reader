@@ -46,3 +46,24 @@ class BusyGuard {
  private:
   BusyCounter* counter = nullptr;
 };
+
+namespace idlepolicy {
+
+// A loop() call that blocked this long was doing work, not waiting for input: the idle clock restarts
+// when it returns, so the user gets a full timeout to see the result instead of an instant sleep.
+constexpr unsigned long kBlockingLoopMs = 2000;
+
+constexpr bool blockedLoopCountsAsActivity(const unsigned long loopMs) { return loopMs >= kBlockingLoopMs; }
+
+enum class TimeoutAction : uint8_t {
+  Sleep,
+  Defer,  // work in flight: decide again on the next pass, change nothing now
+};
+
+// What to do once the idle timeout has elapsed. In-flight work and an exclusive storage owner (USB drive)
+// win over sleeping.
+constexpr TimeoutAction decideTimeout(const bool busy, const bool exclusiveStorage) {
+  return (busy || exclusiveStorage) ? TimeoutAction::Defer : TimeoutAction::Sleep;
+}
+
+}  // namespace idlepolicy

@@ -33,13 +33,8 @@ class FontDownloadActivity final : public UiListActivity {
   void onEnter() override;
   void onExit() override;
   void render(RenderLock&&) override;
-  bool preventAutoSleep() override {
-    return state_ == LOADING_MANIFEST || state_ == DOWNLOADING ||
-           // The download is synchronous and blocks the main loop until it
-           // completes, so activityManager.preventAutoSleep() is never polled
-           // during downloading.
-           state_ == COMPLETE || state_ == ERROR;
-  }
+  // The fetches block loop(), which restarts the idle clock when it returns; the result screens may auto-sleep.
+  bool preventAutoSleep() override { return state_ == LOADING_MANIFEST || state_ == DOWNLOADING; }
   bool skipLoopDelay() override { return true; }
 
  private:
