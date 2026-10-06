@@ -18,6 +18,7 @@
 #include "ReaderActivity.h"
 #include "ReaderMenuActivity.h"
 #include "ReaderToolbarUi.h"
+#include "ReaderUtils.h"
 #include "components/OptionPopup.h"
 
 class EpubReaderActivity final : public ReaderActivity {
@@ -32,10 +33,6 @@ class EpubReaderActivity final : public ReaderActivity {
   std::optional<uint32_t> cachedVisibleTextOffset;
   std::optional<uint32_t> currentPageVisibleOffset;
   std::optional<uint32_t> pendingOffsetJump;
-  unsigned long lastPageTurnTime = 0UL;
-  unsigned long pageTurnDuration = 0UL;
-  int8_t pendingManualTurn = 0;
-  bool pendingManualTurnTouch = false;
   bool pendingPercentJump = false;
   float pendingSpineProgress = 0.0f;
   bool pendingScreenshot = false;
@@ -43,7 +40,6 @@ class EpubReaderActivity final : public ReaderActivity {
   uint8_t pageLoadRetryCount = 0;
   static constexpr uint8_t MAX_PAGE_LOAD_RETRIES = 3;
   bool skipNextButtonCheck = false;
-  bool automaticPageTurnActive = false;
   bool showBookmarkMessage = false;
   bool showDictionaryMessage = false;
   unsigned long dictionaryMessageTime = 0UL;
@@ -100,7 +96,6 @@ class EpubReaderActivity final : public ReaderActivity {
   bool overlayRefreshPending = false;
   void pushOverlayRefresh();
   void settleOverlayRefresh();
-  int autoTurnOption = 0;  // current auto page-turn rate index (More panel)
   std::vector<ReaderMenuActivity::MenuItem> moreItems;
 
   // Footnote support
@@ -164,7 +159,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void clearDeferredReposition();
   void rememberCurrentContentOffset();
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
-  void jumpToPercent(int percent);
+  void jumpToPercent(int percent) override;
   void onReaderMenuConfirm(ReaderMenuActivity::MenuAction action);
   int currentTocIndex() const;
   ReaderMenuActivity::Capabilities menuCapabilities() const;
@@ -172,10 +167,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // released the section.
   ChapterPosition chapterPosition() const;
   int bookPercentFor(const ChapterPosition& position) const;
-  void openReaderMenu();
-  ReaderMenuActivity::Capabilities menuCapabilities() const;
+  void openReaderMenu() override;
+  ReaderMenuActivity::Capabilities menuCapabilities() const override;
   // Toolbar reader menu (see Overlay above).
-  bool usesToolbarMenu() const;
+  bool usesToolbarMenu() const override;
   void openOverlay(Overlay target);
   void closeOverlayToPage();
   void discardOverlayPage();
@@ -204,9 +199,7 @@ class EpubReaderActivity final : public ReaderActivity {
   int clippingAtPoint(const Page& page, int x, int y) const;
   void openClippings();
   void applyProgressChange(const ProgressChangeResult& progress);
-  bool launchKOReaderSync();
-  unsigned long confirmLongPressThreshold() const;
-  void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
+  bool syncAction() override;
   void loadCachedBookmarks();
   void addBookmark();
   void updateBookmarkFlag();
@@ -219,6 +212,19 @@ class EpubReaderActivity final : public ReaderActivity {
   void drawClippingHighlights(const Page& page, int fontId, int orientedMarginTop, int orientedMarginLeft) const;
   void renderStatusBar() const;
   void applyOrientation(uint8_t orientation);
+  void rotateTo(uint8_t orientation) override { applyOrientation(orientation); }
+  void onAutoTurnStarted() override;
+  bool onLoopTick() override;
+  bool pageReady() const override { return section != nullptr; }
+  bool isRtlBook() const override { return epub && ReaderUtils::isRtlBookLanguage(epub->getLanguage()); }
+  int chapterSkipAmount() const override { return 1; }
+  bool handleTapInput() override;
+  bool handleBackOverride() override;
+  bool handleExtraKeys(bool endOfBookMenuOpen) override;
+  bool handleMenuOverlay() override;
+  bool openToolbarOverlay() override;
+  void bookmarkAction(bool guardRepeat) override;
+  void lookupAction(bool guardRepeat) override;
   void applyInitialOrientation() override;
   // The orientation the current layout was built for. The control center's
   // orientation tile can move SETTINGS.orientation while this reader sits on
@@ -252,7 +258,7 @@ class EpubReaderActivity final : public ReaderActivity {
       : ReaderActivity("EpubReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
   ~EpubReaderActivity() override;
 
-  void loop() override;
+  void loop() override { readerLoop(); }
   void render(RenderLock&& lock) override;
 
   bool pageTurn(bool isForward) override;

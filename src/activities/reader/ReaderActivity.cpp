@@ -240,6 +240,170 @@ void ReaderActivity::loop() {
   requestUpdate();
 }
 
+void ReaderActivity::readerLoop() {
+  rememberBookOnceRendered();
+  if (!onLoopTick()) return;
+  clearEndOfBookOptionsIfNeeded();
+
+  // The toolbar menu owns all input while shown, ahead of the automatic page turn: its rate
+  // popup switches automatic turning on and leaves the panel open, so the timer must neither
+  // flip the page under it nor eat the panel's next Confirm/Back release.
+  if (handleMenuOverlay()) return;
+
+  const auto caps = menuCapabilities();
+  switch (mappedInput.homeButtonAction()) {
+    case HomeButtonAction::ReaderMenu:
+    case HomeButtonAction::Bookmark:
+    case HomeButtonAction::Sync:
+    case HomeButtonAction::Dictionary:
+    case HomeButtonAction::Footnotes:
+      autoTurnActive = false;
+      break;
+    default:
+      break;
+  }
+  if (tickAutoPageTurn()) return;
+
+  // While the end-of-book suggestion menu is up it owns Confirm/Back/navigation, so it gets
+  // this tick's input first and the long-press shortcuts below stay inert behind it -- a hold
+  // there must not drop a bookmark onto the suggestion screen. Anything the menu does not
+  // handle (long-press Back to the file browser, say) still falls through.
+  if (handleEndOfBookMenu()) return;
+  const bool endOfBookMenuOpen = endOfBookMenuActive();
+
+  const unsigned long confirmHoldMs = confirmLongPressThreshold(caps);
+  // wasLongPressed() suppresses the release that follows it, so leave it unpolled while the
+  // end-of-book menu owns Confirm -- otherwise the menu never sees that release.
+  const bool confirmLongPressed = !endOfBookMenuOpen && confirmHoldMs != 0 &&
+                                  mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, confirmHoldMs);
+  const bool confirmReleased = mappedInput.wasReleased(MappedInputManager::Button::Confirm);
+  if (confirmLongPressed) {
+    switch (SETTINGS.longPressMenuFunction) {
+      case CrossPointSettings::LP_MENU_BOOKMARK:
+        bookmarkAction(false);
+        break;
+      case CrossPointSettings::LP_MENU_KOSYNC:
+        if (syncAction()) return;
+        break;
+      case CrossPointSettings::LP_MENU_DICTIONARY:
+        lookupAction(false);
+        return;
+      default:
+        break;
+    }
+  }
+
+  if (!endOfBookMenuOpen) {
+    switch (mappedInput.homeButtonAction()) {
+      case HomeButtonAction::Bookmark:
+        if (caps.toggleBookmark) {
+          bookmarkAction(true);
+          return;
+        }
+        break;
+      case HomeButtonAction::Sync:
+        if (caps.sync) {
+          syncAction();
+          return;
+        }
+        break;
+      case HomeButtonAction::Dictionary:
+        if (caps.lookup) {
+          lookupAction(true);
+          return;
+        }
+        break;
+      case HomeButtonAction::ReaderMenu:
+        openMenu();
+        return;
+      default:
+        break;
+    }
+  }
+
+  // Link taps take priority over the reader-menu and page-turn zones.
+  if (handleTapInput()) return;
+
+  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput, isRtlBook());
+  const bool touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
+  if (confirmReleased || touchMenu) {
+    if (touchMenu) haptic_feedback::touchAction();
+    openMenu();
+    return;
+  }
+
+  if (handleBackOverride()) return;
+  if (handleBackNavigation()) return;
+  if (handleExtraKeys(endOfBookMenuOpen)) return;
+
+  constexpr unsigned long kMinManualTurnGapMs = 200;
+  const bool turnGuardActive = RenderLock::peek() || (millis() - lastPageTurnTime) < kMinManualTurnGapMs;
+  if (pendingManualTurn != 0 && !turnGuardActive) {
+    if (!pageReady()) {
+      pendingManualTurn = 0;
+      return;
+    }
+    const bool forward = pendingManualTurn > 0;
+    pendingManualTurn = 0;
+    const bool succeeded = pageTurn(forward);
+    if (succeeded) lastPageTurnTime = millis();
+    notePageTurn(forward, succeeded);
+    if (succeeded && pendingManualTurnTouch) haptic_feedback::touchAction();
+    pendingManualTurnTouch = false;
+    requestUpdate();
+    return;
+  }
+
+  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  prevTriggered = prevTriggered || touch.prev;
+  nextTriggered = nextTriggered || touch.next;
+  if (!prevTriggered && !nextTriggered) return;
+  if (handleEndOfBookPageTurn(prevTriggered, nextTriggered)) return;
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Power) &&
+      mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+    return;
+  }
+
+  const bool touched = touch.prev || touch.next;
+  const unsigned long heldMs = touched ? touch.heldMs : mappedInput.getHeldTime();
+  const bool longPress = !fromTilt && heldMs >= ReaderUtils::SKIP_HOLD_MS;
+  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP) {
+    const int step = chapterSkipAmount();
+    const bool succeeded = skipPages(nextTriggered ? step : -step);
+    // A skip is navigation, not reading: it never counts toward session dwell.
+    notePageTurn(false, succeeded);
+    if (succeeded && touched) haptic_feedback::touchAction(true);
+    requestUpdate();
+    return;
+  }
+
+  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.ORIENTATION_CHANGE && caps.rotate) {
+    rotateTo(nextTriggered ? (SETTINGS.orientation - 1 + SETTINGS.ORIENTATION_COUNT) % SETTINGS.ORIENTATION_COUNT
+                           : (SETTINGS.orientation + 1) % SETTINGS.ORIENTATION_COUNT);
+    if (touched) haptic_feedback::touchAction(true);
+    requestUpdate();
+    return;
+  }
+
+  if (!pageReady()) {
+    requestUpdate();
+    return;
+  }
+
+  if (turnGuardActive) {
+    pendingManualTurn = prevTriggered ? -1 : 1;
+    pendingManualTurnTouch = touched;
+    return;
+  }
+
+  const bool succeeded = pageTurn(!prevTriggered);
+  if (succeeded) lastPageTurnTime = millis();
+  notePageTurn(!prevTriggered, succeeded);
+  if (succeeded && touched) haptic_feedback::touchAction();
+  requestUpdate();
+}
+
 void ReaderActivity::render(RenderLock&&) {
   if (isAtEndOfBook()) {
     if (!endOfBookOptions) {

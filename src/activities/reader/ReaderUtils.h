@@ -21,6 +21,9 @@ constexpr unsigned long SKIP_HOLD_MS = 700;
 constexpr unsigned long BOOKMARK_HOLD_MS = 400;
 constexpr unsigned long BOOKMARK_MESSAGE_DURATION_MS = 2500;
 
+// Pages per minute of the automatic page turn; index 0 is "off".
+constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
+
 inline bool gestureAllowsSwipe(const uint8_t gesture) {
   return gesture == CrossPointSettings::TAP_AND_SWIPE || gesture == CrossPointSettings::SWIPE_ONLY;
 }

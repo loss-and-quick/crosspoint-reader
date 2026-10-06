@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "EndOfBookOptions.h"
+#include "ReaderMenuActivity.h"
 #include "ReaderSession.h"
 #include "activities/Activity.h"
 
@@ -58,6 +59,72 @@ class ReaderActivity : public Activity {
   virtual void renderBook() = 0;
   virtual void applyInitialOrientation();
   virtual void onEndOfBookRendered() {}
+
+  // ---- Reader shell: behaviour every reader shares, whatever produces its pages.
+  // A reader supplies its pages and positions through the virtual hooks above and below; the
+  // shell owns go-to-percent, the screenshot request, automatic page turning and the input loop.
+
+  // Moves to `percent` of the book. Called with the render lock not held.
+  virtual void jumpToPercent(int percent) {}
+  // Opens the reader's menu; go-to-percent returns to it when cancelled.
+  virtual void openReaderMenu() {}
+  void openGoToPercent(int initialPercent);
+
+  // Rows the reader's menu offers.
+  virtual ReaderMenuActivity::Capabilities menuCapabilities() const { return {}; }
+
+  bool pendingScreenshot = false;
+  void requestScreenshot();
+  void takePendingScreenshot();
+
+  // Automatic page turn. `autoTurnOption` indexes ReaderUtils::PAGE_TURN_RATES (0 = off).
+  bool autoTurnActive = false;
+  uint8_t autoTurnOption = 0;
+  unsigned long autoTurnIntervalMs = 0;
+  // Time of the last successful manual or automatic page turn; spaces turns and auto turns.
+  unsigned long lastPageTurnTime = 0;
+  void setAutoPageTurn(uint8_t option);
+  // Turns the page when the interval has elapsed; true when this call consumed the loop pass.
+  bool tickAutoPageTurn();
+
+  // ---- Input loop. readerLoop() is the input loop of a reader that runs on the shell; what
+  // differs between readers is expressed through the hooks below.
+  //
+  // Per-pass work of the reader before any input is looked at (background builds, popups,
+  // layout drift). Return false to end the pass.
+  virtual bool onLoopTick() { return true; }
+  // False while the reader has no page to turn or draw on (it is still being laid out).
+  virtual bool pageReady() const { return true; }
+  virtual bool isRtlBook() const { return false; }
+  // Pages a long press of a page button skips in chapter-skip mode.
+  virtual int chapterSkipAmount() const { return 10; }
+  // Reader-specific input handled before page turning: link taps, footnote Back, extra keys.
+  // Return true when the pass was consumed.
+  virtual bool handleTapInput() { return false; }
+  virtual bool handleBackOverride() { return false; }
+  virtual bool handleExtraKeys(bool endOfBookMenuOpen) { return false; }
+
+  // What the reader does with the Confirm long press, the Home key and a rotation request.
+  // `guardRepeat`: ignore the request while the previous confirmation popup is still up.
+  virtual void bookmarkAction(bool guardRepeat) {}
+  virtual void lookupAction(bool guardRepeat) {}
+  // True when the sync screen was launched.
+  virtual bool syncAction() { return false; }
+  virtual void rotateTo(uint8_t orientation) {}
+  // The auto page turn just became active.
+  virtual void onAutoTurnStarted() {}
+  unsigned long confirmLongPressThreshold(const ReaderMenuActivity::Capabilities& caps) const;
+
+  // A page turn requested while the previous one is still drawing waits here (-1 / 0 / +1).
+  int8_t pendingManualTurn = 0;
+  bool pendingManualTurnTouch = false;
+
+  // Toolbar menu hooks of the reader (see readerLoop).
+  virtual bool usesToolbarMenu() const { return false; }
+  virtual bool handleMenuOverlay() { return false; }
+  virtual bool openToolbarOverlay() { return false; }
+  void openMenu();
+  void readerLoop();
 
   bool handleBackNavigation();
   /** True while the end-of-book suggestion menu is on screen and owning input. */

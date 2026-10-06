@@ -70,7 +70,7 @@ bool xteinkClassPanel() {
   return gpio.isXteinkDevice() || BoardConfig::isX4Pro() || BoardConfig::isX4Classic() || BoardConfig::isEegoA4();
 }
 
-constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
+constexpr size_t initialBookmarkCacheCapacity = 16;
 constexpr float bookmarkProgressEpsilon = 0.0001f;
 constexpr int CLIP_SELECTION_PAGE_WINDOW = 3;
 
@@ -386,7 +386,7 @@ void EpubReaderActivity::openReaderMenu() {
                              applyOrientation(menu.orientation);
                            }
 
-                           toggleAutoPageTurn(menu.pageTurnOption);
+                           setAutoPageTurn(menu.pageTurnOption);
 
                            if (!result.isCancelled) {
                              onReaderMenuConfirm(static_cast<ReaderMenuActivity::MenuAction>(menu.action));
@@ -660,17 +660,15 @@ void EpubReaderActivity::openClippings() {
   });
 }
 
-void EpubReaderActivity::loop() {
+bool EpubReaderActivity::onLoopTick() {
   if (loadFailurePopup.isActive()) {
     loadFailurePopup.handleInput(mappedInput, [this] { requestUpdate(); });
-    return;
+    return false;
   }
   if (!epub) {
     finish();
-    return;
+    return false;
   }
-
-  rememberBookOnceRendered();
 
   // The radio stopped for a chapter build: once the render task has let go of the lock, that page
   // is on screen; once the build tick below has finished the chapter, no parser is left alive and
@@ -688,14 +686,13 @@ void EpubReaderActivity::loop() {
     RenderLock lock(RenderLock::Mode::Try);
     if (lock.ownsLock() && linkNoteTitle.repaint(bleturner::linkNote())) requestUpdate();
   }
-
   // Someone else turned the screen while this reader was stacked (the control
   // center's orientation tile). Reflow before the next render, or the page
   // would be drawn with a layout built for the previous frame size.
   if (appliedOrientation != SETTINGS.orientation) {
     applyOrientation(SETTINGS.orientation);
     requestUpdate();
-    return;
+    return false;
   }
 
   constexpr unsigned long IDLE_PREWARM_DEBOUNCE_MS = 400;
@@ -741,7 +738,6 @@ void EpubReaderActivity::loop() {
   }
 
   const bool atEndOfBook = currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount();
-  clearEndOfBookOptionsIfNeeded();
 
   if (SETTINGS.removeReadBooksFromRecents) {
     if (atEndOfBook && !recentsEntryRemoved) {
@@ -758,9 +754,6 @@ void EpubReaderActivity::loop() {
     pendingReadFolderMove = false;
   }
 
-  const auto touch =
-      ReaderUtils::detectTouchPageTurn(renderer, mappedInput, ReaderUtils::isRtlBookLanguage(epub->getLanguage()));
-
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
     showBookmarkMessage = false;
     requestUpdate();
@@ -770,211 +763,97 @@ void EpubReaderActivity::loop() {
     showDictionaryMessage = false;
     requestUpdate();
   }
+  return true;
+}
 
   if (showFontDamagedMessage && (millis() - fontDamagedMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
     showFontDamagedMessage = false;
     requestUpdate();
   }
+  return true;
+}
 
-  // The toolbar reader menu owns all input while shown, ahead of the automatic page turn
-  // below: the More panel's rate popup switches automatic turning on and leaves the panel
-  // open, so the timer must neither flip the page under it nor eat the panel's next
-  // Confirm/Back release.
-  if (overlay != Overlay::None) {
-    if (usesToolbarMenu()) {
-      // Hold the interval at zero elapsed so closing the panel starts a fresh one.
-      lastPageTurnTime = millis();
-      handleOverlayInput();
-      return;
-    }
-    // The style was switched off while an overlay was up (Settings reached via
-    // the More panel); fall back to the clean page.
-    overlay = Overlay::None;
-    discardOverlayPage();
-    requestUpdate();
-    return;
+bool EpubReaderActivity::handleMenuOverlay() {
+  if (overlay == Overlay::None) return false;
+  if (usesToolbarMenu()) {
+    // Hold the interval at zero elapsed so closing the panel starts a fresh one.
+    lastPageTurnTime = millis();
+    handleOverlayInput();
+    return true;
   }
+  // The style was switched off while an overlay was up (Settings reached via
+  // the More panel); fall back to the clean page.
+  overlay = Overlay::None;
+  discardOverlayPage();
+  requestUpdate();
+  return true;
+}
 
+bool EpubReaderActivity::openToolbarOverlay() {
+  if (!section) return false;
+  pendingManualTurn = 0;
+  openOverlay(Overlay::Toolbar);
+  return true;
+}
+
+void EpubReaderActivity::bookmarkAction(const bool guardRepeat) {
+  if (guardRepeat && showBookmarkMessage) return;
+  addBookmark();
+  showBookmarkMessage = true;
+  bookmarkMessageTime = millis();
+  requestUpdate();
+}
+
+void EpubReaderActivity::lookupAction(const bool guardRepeat) {
+  if (guardRepeat && showDictionaryMessage) return;
+  openDictionaryWordSelect();
+}
+
+// Link taps take priority over the reader-menu and page-turn zones.
+bool EpubReaderActivity::handleTapInput() {
+  const bool atEndOfBook = currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount();
   int selectionX = 0;
   int selectionY = 0;
   if (!atEndOfBook && SETTINGS.touchReaderControls && mappedInput.wasScreenLongPress(selectionX, selectionY)) {
-    automaticPageTurnActive = false;
+    autoTurnActive = false;
     pendingManualTurn = 0;
     startClipSelection(selectionX, selectionY);
-    return;
+    return true;
   }
-
-  switch (mappedInput.homeButtonAction()) {
-    case HomeButtonAction::ReaderMenu:
-    case HomeButtonAction::Bookmark:
-    case HomeButtonAction::Sync:
-    case HomeButtonAction::Dictionary:
-    case HomeButtonAction::Footnotes:
-    case HomeButtonAction::CreateClipping:
-      automaticPageTurnActive = false;
-      break;
-    default:
-      break;
+  if (atEndOfBook || currentPageLinks.empty() || !SETTINGS.touchReaderControls || !mappedInput.hasTouch()) {
+    return false;
   }
+  int touchX = 0;
+  int touchY = 0;
+  if (!mappedInput.wasScreenTapped(touchX, touchY)) return false;
+  const auto* link = EpubReaderUtils::linkAtPoint(currentPageLinks, touchX, touchY, currentPageLinkMarginLeft,
+                                                  currentPageLinkMarginTop);
+  if (!link) return false;
+  navigateToHref(link->href, true);
+  haptic_feedback::touchAction();
+  return true;
+}
 
-  if (automaticPageTurnActive) {
-    const bool touchStopsAutoTurn = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-        mappedInput.wasReleased(MappedInputManager::Button::Back) || touchStopsAutoTurn) {
-      automaticPageTurnActive = false;
-      if (touchStopsAutoTurn) haptic_feedback::touchAction();
-      requestUpdate();
-      return;
-    }
-
-    if (!section) {
-      requestUpdate();
-      return;
-    }
-
-    if (RenderLock::peek()) {
-      lastPageTurnTime = millis();
-      return;
-    }
-
-    if ((millis() - lastPageTurnTime) >= pageTurnDuration) {
-      const bool succeeded = pageTurn(true);
-      notePageTurn(true, succeeded);
-      requestUpdate();
-      return;
-    }
-  }
-
-  if (showClippingMessage && (millis() - clippingMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
-    showClippingMessage = false;
-    requestUpdate();
-  }
-
-  // While the end-of-book suggestion menu is up it owns Confirm/Back/navigation, so it
-  // gets this tick's input first and the long-press shortcuts below stay inert behind it
-  // -- a hold there must not drop a bookmark onto the suggestion screen or paint the
-  // dictionary word picker over it. Anything the menu does not handle (long-press Back to
-  // the file browser, say) still falls through to the regular handlers.
-  if (handleEndOfBookMenu()) {
-    return;
-  }
-  const bool endOfBookMenuOpen = endOfBookMenuActive();
-
-  const unsigned long confirmHoldMs = confirmLongPressThreshold();
-  // wasLongPressed() suppresses the release that follows it, so leave it unpolled while
-  // the end-of-book menu owns Confirm -- otherwise the menu never sees that release.
-  const bool confirmLongPressed = !endOfBookMenuOpen && confirmHoldMs != 0 &&
-                                  mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, confirmHoldMs);
-  const bool confirmReleased = mappedInput.wasReleased(MappedInputManager::Button::Confirm);
-  if (confirmLongPressed) {
-    switch (SETTINGS.longPressMenuFunction) {
-      case CrossPointSettings::LP_MENU_BOOKMARK:
-        addBookmark();
-        showBookmarkMessage = true;
-        bookmarkMessageTime = millis();
-        requestUpdate();
-        break;
-      case CrossPointSettings::LP_MENU_KOSYNC:
-        if (launchKOReaderSync()) {
-          return;
-        }
-        break;
-      case CrossPointSettings::LP_MENU_DICTIONARY:
-        openDictionaryWordSelect();
-        return;
-      case CrossPointSettings::LP_MENU_CREATE_CLIPPING:
-        startClipSelection();
-        return;
-      case CrossPointSettings::LP_MENU_FOOTNOTES:
-        if (footnoteDepth > 0) {
-          restoreSavedPosition();
-        } else {
-          openFootnoteSelect(false);
-        }
-        return;
-      case CrossPointSettings::LP_MENU_READER_MENU:
-      case CrossPointSettings::LP_MENU_DISABLED:
-      default:
-        break;
-    }
-  }
-
-  if (!endOfBookMenuOpen) {
-    switch (mappedInput.homeButtonAction()) {
-      case HomeButtonAction::Bookmark:
-        if (!showBookmarkMessage) {
-          addBookmark();
-          showBookmarkMessage = true;
-          bookmarkMessageTime = millis();
-          requestUpdate();
-        }
-        return;
-      case HomeButtonAction::Sync:
-        launchKOReaderSync();
-        return;
-      case HomeButtonAction::Dictionary:
-        if (!showDictionaryMessage) openDictionaryWordSelect();
-        return;
-      case HomeButtonAction::CreateClipping:
-        startClipSelection();
-        return;
-      case HomeButtonAction::ReaderMenu:
-        if (usesToolbarMenu() && section)
-          openOverlay(Overlay::Toolbar);
-        else
-          openReaderMenu();
-        return;
-      default:
-        break;
-    }
-  }
-
-  // Link taps take priority over the reader-menu and page-turn zones.
-  if (!atEndOfBook && !currentPageLinks.empty() && SETTINGS.touchReaderControls && mappedInput.hasTouch()) {
-    int touchX = 0;
-    int touchY = 0;
-    if (mappedInput.wasScreenTapped(touchX, touchY)) {
-      const auto* link = EpubReaderUtils::linkAtPoint(currentPageLinks, touchX, touchY, currentPageLinkMarginLeft,
-                                                      currentPageLinkMarginTop);
-      if (link) {
-        navigateToHref(link->href, true);
-        haptic_feedback::touchAction();
-        return;
-      }
-    }
-  }
-
-  const bool touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
-  if (confirmReleased || touchMenu) {
-    if (touchMenu) haptic_feedback::touchAction();
-    // Toolbar style: the page is on screen and in the framebuffer, so paint the
-    // toolbar over it (one refresh) instead of pushing a full-screen menu.
-    if (usesToolbarMenu() && section) {
-      pendingManualTurn = 0;
-      openOverlay(Overlay::Toolbar);
-    } else {
-      openReaderMenu();
-    }
-    return;  // no build step before the menu shows
-  }
-
+bool EpubReaderActivity::handleBackOverride() {
   if (footnoteDepth > 0 && mappedInput.wasReleased(MappedInputManager::Button::Back) &&
       mappedInput.getHeldTime() < ReaderUtils::GO_BACK_OR_HOME_MS) {
     restoreSavedPosition();
-    return;
+    return true;
   }
+  return false;
+}
 
-  if (handleBackNavigation()) {
-    return;
+bool EpubReaderActivity::handleExtraKeys(const bool endOfBookMenuOpen) {
+  if (!endOfBookMenuOpen && mappedInput.homeButtonAction() == HomeButtonAction::CreateClipping) {
+    startClipSelection();
+    return true;
   }
-
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::CREATE_CLIPPING &&
       mappedInput.wasReleased(MappedInputManager::Button::Power) &&
       !mappedInput.wasReleased(MappedInputManager::Button::Down)) {
     startClipSelection();
-    return;
+    return true;
   }
-
   if ((!endOfBookMenuOpen && mappedInput.homeButtonAction() == HomeButtonAction::Footnotes) ||
       (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FOOTNOTES &&
        mappedInput.wasReleased(MappedInputManager::Button::Power) &&
@@ -984,79 +863,10 @@ void EpubReaderActivity::loop() {
     } else {
       openFootnoteSelect(false);
     }
-    return;
+    return true;
   }
-
-  constexpr unsigned long kMinManualTurnGapMs = 200;
-  const bool turnGuardActive = RenderLock::peek() || (millis() - lastPageTurnTime) < kMinManualTurnGapMs;
-  if (pendingManualTurn != 0 && !turnGuardActive) {
-    if (!section) {
-      pendingManualTurn = 0;
-      return;
-    }
-    const bool forward = pendingManualTurn > 0;
-    pendingManualTurn = 0;
-    const bool succeeded = pageTurn(forward);
-    notePageTurn(forward, succeeded);
-    if (succeeded && pendingManualTurnTouch) haptic_feedback::touchAction();
-    pendingManualTurnTouch = false;
-    requestUpdate();
-    return;
-  }
-
-  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
-  prevTriggered = prevTriggered || touch.prev;
-  nextTriggered = nextTriggered || touch.next;
-  if (!prevTriggered && !nextTriggered) {
-    // Nothing to act on in this frame: build more of the chapter.
-    backgroundBuildTick();
-    return;
-  }
-
-  if (handleEndOfBookPageTurn(prevTriggered, nextTriggered)) {
-    return;
-  }
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Power) &&
-      mappedInput.wasReleased(MappedInputManager::Button::Down)) {
-    return;
-  }
-
-  const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
-  const bool longPress = !fromTilt && heldMs >= ReaderUtils::SKIP_HOLD_MS;
-  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP) {
-    const bool succeeded = skipPages(nextTriggered ? 1 : -1);
-    notePageTurn(false, succeeded);
-    if (succeeded && (touch.prev || touch.next)) haptic_feedback::touchAction(true);
-    requestUpdate();
-    return;
-  }
-
-  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.ORIENTATION_CHANGE) {
-    const uint8_t newOrientation =
-        nextTriggered ? (SETTINGS.orientation - 1 + SETTINGS.ORIENTATION_COUNT) % SETTINGS.ORIENTATION_COUNT
-                      : (SETTINGS.orientation + 1) % SETTINGS.ORIENTATION_COUNT;
-    applyOrientation(newOrientation);
-    if (touch.prev || touch.next) haptic_feedback::touchAction(true);
-    requestUpdate();
-    return;
-  }
-
-  if (!section) {
-    requestUpdate();
-    return;
-  }
-
-  if (turnGuardActive) {
-    pendingManualTurn = prevTriggered ? -1 : 1;
-    pendingManualTurnTouch = touch.prev || touch.next;
-    return;
-  }
-
-  const bool succeeded = pageTurn(!prevTriggered);
-  notePageTurn(!prevTriggered, succeeded);
-  if (succeeded && (touch.prev || touch.next)) haptic_feedback::touchAction();
-  requestUpdate();
+  return false;
+}
 }
 
 void EpubReaderActivity::jumpToPercent(int percent) {
@@ -1238,16 +1048,7 @@ void EpubReaderActivity::onReaderMenuConfirm(ReaderMenuActivity::MenuAction acti
       // Handled in-place by ReaderMenuActivity using the live frontlight HAL.
       break;
     case ReaderMenuActivity::MenuAction::GO_TO_PERCENT: {
-      const int initialPercent = bookPercentFor(chapterPosition());
-      startActivityForResult(
-          std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
-          [this](const ActivityResult& result) {
-            if (result.isCancelled) {
-              openReaderMenu();
-            } else {
-              jumpToPercent(std::get<PercentResult>(result.data).percent);
-            }
-          });
+      openGoToPercent(bookPercentFor(chapterPosition()));
       break;
     }
     case ReaderMenuActivity::MenuAction::DICTIONARY: {
@@ -1289,15 +1090,11 @@ void EpubReaderActivity::onReaderMenuConfirm(ReaderMenuActivity::MenuAction acti
       return;
     }
     case ReaderMenuActivity::MenuAction::SCREENSHOT: {
-      {
-        RenderLock lock;
-        pendingScreenshot = true;
-      }
-      requestUpdate();
+      requestScreenshot();
       break;
     }
     case ReaderMenuActivity::MenuAction::SYNC: {
-      launchKOReaderSync();
+      syncAction();
       break;
     }
     case ReaderMenuActivity::MenuAction::BOOKMARKS: {
@@ -1321,25 +1118,7 @@ void EpubReaderActivity::onReaderMenuConfirm(ReaderMenuActivity::MenuAction acti
   }
 }
 
-unsigned long EpubReaderActivity::confirmLongPressThreshold() const {
-  // The setting is hidden on these boards, so a stale stored value must not act.
-  if (BoardConfig::hasTouch()) return 0;
-  switch (SETTINGS.longPressMenuFunction) {
-    case CrossPointSettings::LP_MENU_BOOKMARK:
-    case CrossPointSettings::LP_MENU_DICTIONARY:
-    case CrossPointSettings::LP_MENU_CREATE_CLIPPING:
-    case CrossPointSettings::LP_MENU_FOOTNOTES:
-      return ReaderUtils::BOOKMARK_HOLD_MS;
-    case CrossPointSettings::LP_MENU_KOSYNC:
-      return KOREADER_STORE.hasCredentials() ? ReaderUtils::GO_HOME_MS : 0;
-    case CrossPointSettings::LP_MENU_READER_MENU:
-    case CrossPointSettings::LP_MENU_DISABLED:
-    default:
-      return 0;
-  }
-}
-
-bool EpubReaderActivity::launchKOReaderSync() {
+bool EpubReaderActivity::syncAction() {
   flushReaderSession();
 
   // Without a KOReader server the sync activity only brings the device online
@@ -1427,16 +1206,7 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
   section.reset();
 }
 
-void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption) {
-  if (selectedPageTurnOption == 0 || selectedPageTurnOption >= std::size(PAGE_TURN_RATES)) {
-    automaticPageTurnActive = false;
-    return;
-  }
-
-  lastPageTurnTime = millis();
-  pageTurnDuration = (1UL * 60 * 1000) / PAGE_TURN_RATES[selectedPageTurnOption];
-  automaticPageTurnActive = true;
-
+void EpubReaderActivity::onAutoTurnStarted() {
   const uint8_t statusBarHeight = UITheme::getInstance().getStatusBarHeight();
   if (statusBarHeight == 0 || statusBarHeight == UITheme::getInstance().getProgressBarHeight()) {
     RenderLock lock;
@@ -1461,24 +1231,20 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
   if (isForwardTurn) {
     if (section->currentPage < section->pageCount - 1 || section->isBuilding()) {
       section->currentPage++;
-      lastPageTurnTime = millis();
       return true;
     } else if (currentSpineIndex + 1 < epub->getSpineItemsCount()) {
       RenderLock lock;
       nextPageNumber = 0;
       currentSpineIndex++;
       section.reset();
-      lastPageTurnTime = millis();
       return true;
     } else {
       currentSpineIndex = epub->getSpineItemsCount();
-      lastPageTurnTime = millis();
       return true;
     }
   } else {
     if (section->currentPage > 0) {
       section->currentPage--;
-      lastPageTurnTime = millis();
       return true;
     } else if (currentSpineIndex > 0) {
       RenderLock lock;
@@ -1486,7 +1252,6 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
       pendingPageJump = std::numeric_limits<uint16_t>::max();
       currentSpineIndex--;
       section.reset();
-      lastPageTurnTime = millis();
       return true;
     }
   }
@@ -1650,7 +1415,7 @@ void EpubReaderActivity::renderBook() {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     GUI.drawPopup(renderer, message ? message : tr(STR_INDEX_FAILED));
-    automaticPageTurnActive = false;
+    autoTurnActive = false;
   };
 
   if (currentSpineIndex < 0) currentSpineIndex = 0;
@@ -1669,8 +1434,7 @@ void EpubReaderActivity::renderBook() {
 
   const uint8_t statusBarHeight = UITheme::getInstance().getStatusBarHeight();
 
-  if (automaticPageTurnActive &&
-      (statusBarHeight == 0 || statusBarHeight == UITheme::getInstance().getProgressBarHeight())) {
+  if (autoTurnActive && (statusBarHeight == 0 || statusBarHeight == UITheme::getInstance().getProgressBarHeight())) {
     orientedMarginBottom +=
         std::max(SETTINGS.screenMargin,
                  static_cast<uint8_t>(statusBarHeight + UITheme::getInstance().getMetrics().statusBarVerticalMargin));
@@ -1900,7 +1664,7 @@ void EpubReaderActivity::renderBook() {
     renderStatusBar();
     renderer.displayBuffer();
     pageBufferStale = false;
-    automaticPageTurnActive = false;
+    autoTurnActive = false;
     showPendingSyncSaveError();
     return;
   }
@@ -1910,7 +1674,7 @@ void EpubReaderActivity::renderBook() {
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_OUT_OF_BOUNDS), true, EpdFontFamily::BOLD);
     renderStatusBar();
     renderer.displayBuffer();
-    automaticPageTurnActive = false;
+    autoTurnActive = false;
     showPendingSyncSaveError();
     return;
   }
@@ -1921,7 +1685,7 @@ void EpubReaderActivity::renderBook() {
     auto p = section->loadPage(section->currentPage);
     if (!p) {
       LOG_ERR("ERS", "Failed to load page from SD - clearing section cache");
-      automaticPageTurnActive = false;
+      autoTurnActive = false;
       const bool giveUp = ++pageLoadRetryCount > MAX_PAGE_LOAD_RETRIES;
       section->abandonBuild();
       section->clearCache();
@@ -2016,7 +1780,7 @@ void EpubReaderActivity::renderBook() {
 }
 
 void EpubReaderActivity::onEndOfBookRendered() {
-  automaticPageTurnActive = false;
+  autoTurnActive = false;
   if (pendingSyncSaveError) {
     pendingSyncSaveError = false;
     GUI.drawPopup(renderer, tr(STR_SAVE_PROGRESS_FAILED));
@@ -2475,8 +2239,8 @@ void EpubReaderActivity::renderStatusBar() const {
     title = tr(STR_BT_LOW_MEMORY);
   } else if (note != bleturner::LinkNote::None) {
     title = note == bleturner::LinkNote::Connecting ? tr(STR_BT_CONNECTING) : tr(STR_BT_FAILED);
-  } else if (automaticPageTurnActive) {
-    title = tr(STR_AUTO_TURN_ENABLED) + std::to_string(60 * 1000 / pageTurnDuration);
+  } else if (autoTurnActive) {
+    title = tr(STR_AUTO_TURN_ENABLED) + std::to_string(60 * 1000 / autoTurnIntervalMs);
     const uint8_t statusBarHeight = UITheme::getInstance().getStatusBarHeight();
     if (statusBarHeight == 0 || statusBarHeight == UITheme::getInstance().getProgressBarHeight()) {
       textYOffset += UITheme::getInstance().getMetrics().statusBarVerticalMargin;
@@ -3131,9 +2895,9 @@ std::string EpubReaderActivity::moreRowValue(int row) const {
     case MA::ROTATE_SCREEN:
       return I18N.get(kOrient[SETTINGS.orientation % CrossPointSettings::ORIENTATION_COUNT]);
     case MA::AUTO_PAGE_TURN:
-      return (autoTurnOption == 0 || autoTurnOption >= static_cast<int>(std::size(PAGE_TURN_RATES)))
+      return (autoTurnOption == 0 || autoTurnOption >= static_cast<int>(std::size(ReaderUtils::PAGE_TURN_RATES)))
                  ? std::string(tr(STR_STATE_OFF))
-                 : std::to_string(PAGE_TURN_RATES[autoTurnOption]);
+                 : std::to_string(ReaderUtils::PAGE_TURN_RATES[autoTurnOption]);
     default:
       return "";
   }
@@ -3166,13 +2930,12 @@ void EpubReaderActivity::activateMoreRow(int row) {
     }
     case MA::AUTO_PAGE_TURN: {
       std::vector<std::string> labels;
-      labels.reserve(std::size(PAGE_TURN_RATES));
+      labels.reserve(std::size(ReaderUtils::PAGE_TURN_RATES));
       labels.emplace_back(tr(STR_STATE_OFF));
-      for (size_t i = 1; i < std::size(PAGE_TURN_RATES); ++i) labels.push_back(std::to_string(PAGE_TURN_RATES[i]));
-      overlayPopup.show(StrId::STR_AUTO_TURN_PAGES_PER_MIN, labels, autoTurnOption, [this](int idx) {
-        autoTurnOption = idx;
-        toggleAutoPageTurn(static_cast<uint8_t>(idx));
-      });
+      for (size_t i = 1; i < std::size(ReaderUtils::PAGE_TURN_RATES); ++i)
+        labels.push_back(std::to_string(ReaderUtils::PAGE_TURN_RATES[i]));
+      overlayPopup.show(StrId::STR_AUTO_TURN_PAGES_PER_MIN, labels, autoTurnOption,
+                        [this](int idx) { setAutoPageTurn(static_cast<uint8_t>(idx)); });
       paintOverlayPopup();
       return;
     }
